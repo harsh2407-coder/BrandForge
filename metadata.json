@@ -1,0 +1,6 @@
+{
+  "name": "BrandForge",
+  "description": "AI-powered strategic brand intelligence platform that turns rough product ideas into coherent brand systems, identities, and launch kits.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
