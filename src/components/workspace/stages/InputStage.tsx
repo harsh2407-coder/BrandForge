@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useBrand } from '../../../context/BrandContext';
-import { ArrowRight, Lightbulb, Sparkles } from 'lucide-react';
+import { ArrowRight, Lightbulb, Sparkles, AlertCircle } from 'lucide-react';
 
 const SEED_EXAMPLES = [
   {
@@ -55,6 +55,17 @@ export const InputStage: React.FC = () => {
           Don't worry about wording. Give us the rough version. We will construct your brand's strategic architecture through deliberate reasoning.
         </p>
       </div>
+
+      {/* Error Alert if Stage Execution Failed */}
+      {brandMemory.stageExecution?.discover?.status === 'error' && brandMemory.stageExecution.discover.lastError && (
+        <div className="mb-6 p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-red-200 text-sm flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-semibold text-red-300">Discovery Generation Notice</div>
+            <div className="text-xs text-red-200/90 mt-1">{brandMemory.stageExecution.discover.lastError}</div>
+          </div>
+        </div>
+      )}
 
       {/* Main Large Writing Surface */}
       <form onSubmit={handleSubmit} className="space-y-6">

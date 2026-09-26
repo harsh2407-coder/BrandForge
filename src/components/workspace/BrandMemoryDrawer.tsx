@@ -92,7 +92,7 @@ export const BrandMemoryDrawer: React.FC = () => {
     },
     {
       stageId: 'launch',
-      title: 'Launch Distribution',
+      title: 'Deliver & Launch',
       icon: Rocket,
       preview: launch.headline
         ? `Headline: "${launch.headline}"`

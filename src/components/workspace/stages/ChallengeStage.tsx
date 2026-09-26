@@ -34,16 +34,10 @@ export const ChallengeStage: React.FC = () => {
   const [morphCounter, setMorphCounter] = useState<number>(0);
   const [editingFinding, setEditingFinding] = useState<CritiqueFinding | null>(null);
 
-  const categories = [
+  const categories = Array.from(new Set([
     'ALL',
-    'GENERIC LANGUAGE',
-    'AUDIENCE FIT',
-    'POSITIONING',
-    'PERSONALITY',
-    'NAME',
-    'VOICE',
-    'CONSISTENCY',
-  ];
+    ...(challenge.findings || []).map(f => f.category),
+  ]));
 
   const filteredFindings = challenge.findings?.filter(f => {
     if (selectedCategory === 'ALL') return true;
@@ -166,7 +160,22 @@ export const ChallengeStage: React.FC = () => {
               }`}
             >
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {finding.severity && (
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded-full uppercase font-bold tracking-wider ${
+                        finding.severity === 'critical'
+                          ? 'bg-rose-500/25 text-rose-300 border border-rose-500/40'
+                          : finding.severity === 'high'
+                          ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
+                          : finding.severity === 'medium'
+                          ? 'bg-yellow-500/20 text-yellow-200 border border-yellow-500/30'
+                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      }`}
+                    >
+                      {finding.severity}
+                    </span>
+                  )}
                   <span
                     className={`text-[11px] font-mono px-2.5 py-0.5 rounded-full uppercase font-medium ${
                       finding.status === 'PASS'
@@ -181,9 +190,19 @@ export const ChallengeStage: React.FC = () => {
                   <span className="text-[11px] font-mono text-[#8a8175] uppercase">
                     {finding.category}
                   </span>
+                  {(finding.stageTarget || finding.affectedStages?.[0]) && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white/[0.04] text-[#a0988e] border border-white/[0.08] uppercase">
+                      Stage: {finding.stageTarget || finding.affectedStages?.[0]}
+                    </span>
+                  )}
                   {finding.accepted && (
-                    <span className="text-[10px] font-mono uppercase text-emerald-400">
-                      ✓ Applied to Nucleus
+                    <span className="text-[10px] font-mono uppercase text-emerald-400 font-semibold">
+                      ✓ Applied to BrandMemory
+                    </span>
+                  )}
+                  {finding.ignored && (
+                    <span className="text-[10px] font-mono uppercase text-[#736c64]">
+                      Dismissed
                     </span>
                   )}
                 </div>
@@ -196,13 +215,13 @@ export const ChallengeStage: React.FC = () => {
                       className="px-4 py-1.5 rounded-full bg-emerald-500 text-black text-xs font-semibold hover:bg-emerald-400 transition-colors shadow-xs flex items-center gap-1.5"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>Accept suggestion</span>
+                      <span>Accept fix</span>
                     </button>
 
                     <button
                       onClick={() => setEditingFinding(finding)}
                       className="p-1.5 rounded-full spatial-surface text-[#8a8175] hover:text-white transition-colors"
-                      title="Edit manually"
+                      title="Edit fix before applying"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
@@ -218,10 +237,27 @@ export const ChallengeStage: React.FC = () => {
                 )}
               </div>
 
-              {/* Finding Headline */}
-              <h3 className="text-base font-medium text-white mb-2 leading-relaxed">
+              {/* Finding Title & Headline */}
+              {finding.title && finding.title !== finding.finding && (
+                <h4 className="text-sm font-semibold text-white/90 mb-1">
+                  {finding.title}
+                </h4>
+              )}
+              <h3 className="text-base font-medium text-white mb-3 leading-relaxed">
                 "{finding.finding}"
               </h3>
+
+              {/* Evidence Citation */}
+              {finding.evidence && (
+                <div className="mb-3 p-3 rounded-xl bg-white/[0.02] border-l-2 border-amber-500/50 text-xs text-[#b8afa3]">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 block mb-1">
+                    Evidence Cited from Brand Strategy:
+                  </span>
+                  <p className="italic font-serif-editorial">
+                    "{finding.evidence}"
+                  </p>
+                </div>
+              )}
 
               {/* Rationale & Suggested Improvement */}
               <div className="space-y-2 text-xs text-[#a0988e]">
@@ -230,14 +266,34 @@ export const ChallengeStage: React.FC = () => {
                   {finding.whyItMatters}
                 </p>
 
-                {finding.suggestedImprovement && (
+                {(finding.suggestedFix || finding.suggestedImprovement) && (
                   <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] text-xs text-[#e4ded5] space-y-1">
                     <span className="text-[10px] font-mono uppercase text-[#d4af37] block">
-                      Recommended Strategic Improvement:
+                      Recommended Remediation:
                     </span>
                     <p className="leading-relaxed font-serif-editorial text-sm">
-                      {finding.suggestedImprovement}
+                      {finding.suggestedFix || finding.suggestedImprovement}
                     </p>
+                  </div>
+                )}
+
+                {/* Proposed Change Preview */}
+                {finding.proposedChange && (
+                  <div className="p-3.5 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 text-xs space-y-2">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-emerald-400 uppercase">
+                      <span>Target Mutation: {finding.proposedChange.targetStage} → {finding.proposedChange.field}</span>
+                      {finding.proposedChange.rationale && <span>Rationale: {finding.proposedChange.rationale}</span>}
+                    </div>
+                    {finding.proposedChange.currentValue && (
+                      <div className="text-[#8a8175] line-through text-[11px]">
+                        <span className="font-mono text-[9px] uppercase mr-1 text-[#8a8175]">Current:</span>
+                        "{finding.proposedChange.currentValue}"
+                      </div>
+                    )}
+                    <div className="text-emerald-300 font-medium text-xs">
+                      <span className="font-mono text-[9px] uppercase mr-1 text-emerald-400 font-bold">Proposed:</span>
+                      "{finding.proposedChange.proposedValue}"
+                    </div>
                   </div>
                 )}
               </div>
@@ -262,7 +318,7 @@ export const ChallengeStage: React.FC = () => {
           onClick={advanceToNextStage}
           className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
         >
-          <span>Compile launch assets</span>
+          <span>Proceed to Deliver Stage</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
@@ -271,11 +327,11 @@ export const ChallengeStage: React.FC = () => {
       {editingFinding && (
         <EditFieldModal
           isOpen={!!editingFinding}
-          title={`Edit Finding · ${editingFinding.category}`}
-          fieldLabel="Adjust suggested strategic fix"
-          initialValue={editingFinding.suggestedImprovement}
+          title={`Edit Proposed Fix · ${editingFinding.category}`}
+          fieldLabel={editingFinding.proposedChange ? `Adjust replacement for ${editingFinding.proposedChange.targetStage} → ${editingFinding.proposedChange.field}` : "Adjust suggested strategic fix"}
+          initialValue={editingFinding.proposedChange?.proposedValue || editingFinding.suggestedFix || editingFinding.suggestedImprovement}
           onSave={(text) => {
-            editChallengeFinding(editingFinding.id, editingFinding.finding, text);
+            editChallengeFinding(editingFinding.id, editingFinding.finding, text, text);
             setEditingFinding(null);
           }}
           onClose={() => setEditingFinding(null)}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useBrand } from '../../../context/BrandContext';
 import { 
   Sparkles, 
@@ -9,7 +9,12 @@ import {
   Layers, 
   HelpCircle,
   Pencil,
-  ShieldAlert
+  ShieldAlert,
+  RefreshCw,
+  Sliders,
+  Quote,
+  MessageSquare,
+  FileText
 } from 'lucide-react';
 import { EditFieldModal } from '../../shared/EditFieldModal';
 
@@ -18,14 +23,36 @@ export const PersonalityStage: React.FC = () => {
     brandMemory, 
     updatePersonality, 
     advanceToNextStage,
+    generatePersonality,
     goToStage 
   } = useBrand();
 
   const { personality } = brandMemory;
+  const stageStatus = brandMemory.stageExecution?.personality;
   const [selectedTraitIdx, setSelectedTraitIdx] = useState<number>(0);
   const activeTrait = personality.traits?.[selectedTraitIdx] || personality.traits?.[0];
 
   const [isToneModalOpen, setIsToneModalOpen] = useState(false);
+
+  // Auto-trigger personality generation if real project with discovery & positioning ready but personality idle
+  useEffect(() => {
+    if (
+      brandMemory.id !== 'demo-hackathon-teammates' &&
+      brandMemory.discovery?.coreProblem &&
+      brandMemory.positioning?.category &&
+      brandMemory.stageExecution?.personality?.status === 'idle' &&
+      (!personality.traits || personality.traits.length === 0)
+    ) {
+      generatePersonality();
+    }
+  }, [
+    brandMemory.id, 
+    brandMemory.discovery?.coreProblem, 
+    brandMemory.positioning?.category, 
+    brandMemory.stageExecution?.personality?.status, 
+    personality.traits, 
+    generatePersonality
+  ]);
 
   return (
     <div className="relative min-h-[88vh] flex flex-col justify-between max-w-6xl mx-auto px-4 sm:px-6 py-6 text-[#f4efe8]">
@@ -39,7 +66,7 @@ export const PersonalityStage: React.FC = () => {
           </div>
 
           <div className="text-xs text-[#8a8175] font-mono">
-            Derived from validated positioning
+            Derived from validated Discovery & Positioning
           </div>
         </div>
 
@@ -47,9 +74,31 @@ export const PersonalityStage: React.FC = () => {
           If this brand were a person...
         </h1>
         <p className="text-sm text-[#a39a8e] max-w-2xl font-light leading-relaxed">
-          Brand personality is not cosmetic tone. It is a set of behavioral heuristics that guide how your product responds under stress, communicates trade-offs, and earns human respect.
+          Brand personality is not cosmetic tone. It is a set of behavioral heuristics and calibrated voice rules that guide how your product communicates, behaves under stress, and earns human respect.
         </p>
       </div>
+
+      {/* Controlled Stage Error Banner */}
+      {stageStatus?.status === 'error' && (
+        <div className="mt-4 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+            <div className="space-y-0.5">
+              <span className="font-semibold text-xs block text-rose-300">Personality Generation Failed</span>
+              <span className="text-xs text-rose-200/90">
+                {stageStatus.lastError || 'Unable to generate strategic personality. Please try again.'}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={() => generatePersonality()}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Retry Personality</span>
+          </button>
+        </div>
+      )}
 
       {/* Visual Personality Constellation Map */}
       <div className="relative my-8 p-8 sm:p-12 rounded-3xl spatial-surface border border-white/[0.08] flex flex-col items-center justify-center overflow-hidden">
@@ -59,12 +108,12 @@ export const PersonalityStage: React.FC = () => {
         <div className="absolute w-[500px] h-[500px] rounded-full border border-white/[0.03] pointer-events-none" />
 
         {/* Central Core: The Brand Archetype */}
-        <div className="relative z-10 p-6 rounded-full spatial-surface border border-amber-400/40 text-center shadow-2xl backdrop-blur-xl mb-8">
-          <span className="text-[10px] font-mono uppercase tracking-widest text-[#d4af37] block">
-            CORE PERSONA
+        <div className="relative z-10 p-6 rounded-3xl spatial-surface border border-amber-400/40 text-center shadow-2xl backdrop-blur-xl mb-8 max-w-xl">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-[#d4af37] block mb-1">
+            CORE PERSONA & VOICE
           </span>
           <div className="text-xl sm:text-2xl font-serif-editorial text-white font-semibold">
-            {personality.voiceAndTone?.tone || 'Bold, Pragmatic & Collegiate'}
+            {personality.voice?.summary || personality.voiceAndTone?.tone || 'Bold, Pragmatic & Collegiate'}
           </div>
         </div>
 
@@ -128,7 +177,7 @@ export const PersonalityStage: React.FC = () => {
                 Why It Fits The Brand
               </span>
               <p className="text-sm text-[#e8e2d8] leading-relaxed">
-                {activeTrait.whyItFits}
+                {activeTrait.strategicReason || activeTrait.whyItFits}
               </p>
             </div>
 
@@ -146,9 +195,47 @@ export const PersonalityStage: React.FC = () => {
                 What It Changes in UX & Tone
               </span>
               <p className="text-sm text-[#e8e2d8] leading-relaxed">
-                Direct statements on stack compatibility, zero corporate jargon, rapid frictionless onboarding under 60 seconds.
+                {activeTrait.description || 'Direct statements on stack compatibility, zero corporate jargon, rapid frictionless onboarding.'}
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Personality Dimensions / Spectrums */}
+      {personality.dimensions && personality.dimensions.length > 0 && (
+        <div className="p-6 sm:p-8 rounded-3xl spatial-surface border border-white/10 mb-6 space-y-4">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#d4af37] uppercase tracking-widest">
+            <Sliders className="w-4 h-4" />
+            <span>Personality Spectrums & Behavioral Calibration</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            {personality.dimensions.map((dim, idx) => (
+              <div key={idx} className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06] space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-white uppercase tracking-wider text-[11px]">{dim.dimension}</span>
+                  <span className="font-mono text-amber-400 text-[10px]">{dim.value}%</span>
+                </div>
+
+                {/* Spectrum Track */}
+                <div className="relative w-full h-2 rounded-full bg-white/[0.08] overflow-hidden">
+                  <div 
+                    className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-amber-500/60 to-amber-300 rounded-full transition-all duration-500"
+                    style={{ width: `${dim.value}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] font-mono text-[#8a8175]">
+                  <span>{dim.lowLabel}</span>
+                  <span>{dim.highLabel}</span>
+                </div>
+
+                <p className="text-[#a0988e] text-[11px] leading-relaxed pt-1 border-t border-white/[0.04]">
+                  {dim.rationale}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -164,14 +251,19 @@ export const PersonalityStage: React.FC = () => {
           {personality.traitsToAvoid?.map((avoid, idx) => (
             <div
               key={idx}
-              className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1 text-xs"
+              className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1.5 text-xs"
             >
               <div className="font-semibold text-rose-300 uppercase tracking-wide">
-                {avoid.trait}
+                {avoid.name || avoid.trait}
               </div>
-              <p className="text-[#a0988e] leading-relaxed text-[11px]">
-                {avoid.reason}
+              <p className="text-[#e2dad0] text-[11px] leading-relaxed font-light">
+                {avoid.reasonToAvoid || avoid.reason}
               </p>
+              {avoid.description && avoid.description !== avoid.reasonToAvoid && (
+                <p className="text-[#7d7468] text-[10px] leading-relaxed pt-1 border-t border-white/[0.04]">
+                  {avoid.description}
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -185,17 +277,116 @@ export const PersonalityStage: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-          {personality.principles?.map((principle, idx) => (
-            <div
-              key={idx}
-              className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/[0.05] flex items-start gap-3 text-xs text-[#d6cec3]"
-            >
-              <span className="font-mono text-amber-400 text-[11px]">0{idx + 1}.</span>
-              <span className="leading-relaxed">{principle}</span>
-            </div>
-          ))}
+          {(personality.brandPrinciples && personality.brandPrinciples.length > 0) ? (
+            personality.brandPrinciples.map((bp, idx) => (
+              <div
+                key={idx}
+                className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1.5 text-xs text-[#d6cec3]"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-amber-400 text-[11px]">0{idx + 1}.</span>
+                  <span className="font-semibold text-white uppercase tracking-wider text-[11px]">{bp.name}</span>
+                </div>
+                <p className="leading-relaxed text-[#e8e2d8] text-xs font-light">{bp.statement}</p>
+                <p className="text-[#8a8175] text-[11px] pt-1 border-t border-white/[0.04]">
+                  <span className="text-[#d4af37] font-mono">Implication: </span>{bp.implication}
+                </p>
+              </div>
+            ))
+          ) : (
+            personality.principles?.map((principle, idx) => (
+              <div
+                key={idx}
+                className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/[0.05] flex items-start gap-3 text-xs text-[#d6cec3]"
+              >
+                <span className="font-mono text-amber-400 text-[11px]">0{idx + 1}.</span>
+                <span className="leading-relaxed">{principle}</span>
+              </div>
+            ))
+          )}
         </div>
       </div>
+
+      {/* Brand Voice Characteristics & Actionable Tone Rules */}
+      {(personality.voice?.toneRules || personality.voiceAndTone?.toneRules) && (
+        <div className="p-6 sm:p-8 rounded-3xl spatial-surface border border-white/10 mb-6 space-y-4">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#d4af37] uppercase tracking-widest">
+            <MessageSquare className="w-4 h-4" />
+            <span>Brand Voice & Actionable Tone Rules</span>
+          </div>
+
+          {/* Voice Characteristics */}
+          {personality.voice?.characteristics && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              {personality.voice.characteristics.map((vc, idx) => (
+                <div key={idx} className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1">
+                  <span className="text-xs font-semibold text-amber-300 block">{vc.characteristic}</span>
+                  <p className="text-[11px] text-[#a0988e] leading-relaxed">{vc.explanation}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Tone Rules Grid */}
+          <div className="space-y-3 pt-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[#8a8175] block">
+              EXECUTION HEURISTICS (DO / AVOID / EXAMPLE)
+            </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(personality.voice?.toneRules || personality.voiceAndTone?.toneRules || []).map((rule, idx) => (
+                <div key={idx} className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06] space-y-2 text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] uppercase font-bold shrink-0">DO</span>
+                    <span className="text-[#e8e2d8] leading-relaxed">{rule.do}</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[10px] uppercase font-bold shrink-0">AVOID</span>
+                    <span className="text-[#a0988e] leading-relaxed">{rule.avoid}</span>
+                  </div>
+                  <div className="pt-2 border-t border-white/[0.04] text-[11px] text-amber-200/90 font-serif-editorial italic">
+                    "{rule.example}"
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Calibration Writing Samples */}
+      {(personality.writingSamples || personality.voiceAndTone?.writingSamples) && (
+        <div className="p-6 sm:p-8 rounded-3xl spatial-surface-subtle border border-amber-400/20 mb-6 space-y-4">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#d4af37] uppercase tracking-widest">
+            <Quote className="w-4 h-4 text-amber-400" />
+            <span>Voice Calibration Writing Samples</span>
+          </div>
+
+          {(() => {
+            const samples = personality.writingSamples || personality.voiceAndTone?.writingSamples;
+            if (!samples) return null;
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8a8175] block">Short Headline</span>
+                  <p className="text-sm font-semibold text-white">{samples.headline}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8a8175] block">Value Proposition Sentence</span>
+                  <p className="text-xs text-[#e8e2d8] leading-relaxed">{samples.valueProposition}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8a8175] block">Social Announcement</span>
+                  <p className="text-xs text-[#e8e2d8] leading-relaxed">{samples.socialMessage}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.05] space-y-1">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8a8175] block">User-Facing Explanation</span>
+                  <p className="text-xs text-[#e8e2d8] leading-relaxed">{samples.userExplanation}</p>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Action Advance Bar */}
       <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -230,7 +421,11 @@ export const PersonalityStage: React.FC = () => {
               voiceAndTone: {
                 ...personality.voiceAndTone,
                 tone: newTone,
-              }
+              },
+              voice: personality.voice ? {
+                ...personality.voice,
+                summary: newTone,
+              } : undefined,
             });
             setIsToneModalOpen(false);
           }}
@@ -240,3 +435,4 @@ export const PersonalityStage: React.FC = () => {
     </div>
   );
 };
+

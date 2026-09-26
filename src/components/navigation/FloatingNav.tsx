@@ -16,8 +16,8 @@ const STAGES: StageMeta[] = [
   { id: 'naming', index: '04', label: 'Naming' },
   { id: 'visualize', index: '05', label: 'Visualize' },
   { id: 'challenge', index: '06', label: 'Challenge' },
-  { id: 'launch', index: '07', label: 'Launch' },
-  { id: 'brand-kit', index: 'Kit', label: 'Brand Kit' },
+  { id: 'launch', index: '07', label: 'Deliver' },
+  { id: 'brand-kit', index: 'Book', label: 'Brand Book' },
 ];
 
 export const FloatingNav: React.FC = () => {
