@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useBrand } from '../../context/BrandContext';
+import { useBrand, canAccessStage } from '../../context/BrandContext';
 import { StageId } from '../../types/brand';
 import { 
   Check, 
@@ -10,10 +10,11 @@ import {
   Eye, 
   ShieldAlert, 
   Rocket, 
-  Database,
-  Pencil,
-  ChevronRight,
-  HelpCircle
+  Database, 
+  Pencil, 
+  ChevronRight, 
+  HelpCircle,
+  Lock
 } from 'lucide-react';
 import { EditFieldModal } from '../shared/EditFieldModal';
 
@@ -132,17 +133,22 @@ export const Sidebar: React.FC = () => {
             {WORKFLOW_STEPS.map((step) => {
               const active = currentStage === step.id;
               const completed = isStepCompleted(step.id);
+              const isAccessible = canAccessStage(step.id, brandMemory);
               const StepIcon = step.icon;
 
               return (
                 <button
                   key={step.id}
-                  onClick={() => goToStage(step.id)}
+                  onClick={() => isAccessible && goToStage(step.id)}
+                  disabled={!isAccessible}
                   className={`w-full text-left flex items-center justify-between px-3 py-2 rounded-lg transition-all text-xs group ${
                     active
                       ? 'bg-neutral-800 text-white font-medium border border-neutral-700/80 shadow-xs'
+                      : !isAccessible
+                      ? 'text-neutral-600 opacity-40 cursor-not-allowed'
                       : 'text-neutral-400 hover:bg-neutral-900/80 hover:text-neutral-200'
                   }`}
+                  title={!isAccessible ? 'Stage locked: complete upstream stages first' : step.name}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
@@ -163,7 +169,9 @@ export const Sidebar: React.FC = () => {
                   </div>
 
                   <div className="flex items-center shrink-0 pl-1">
-                    {completed ? (
+                    {!isAccessible ? (
+                      <Lock className="w-3 h-3 text-neutral-600" />
+                    ) : completed ? (
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
                     ) : active ? (
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />

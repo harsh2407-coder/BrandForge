@@ -6,7 +6,8 @@ import {
   Pencil, 
   ShieldAlert, 
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Lock
 } from 'lucide-react';
 import { EditFieldModal } from '../../shared/EditFieldModal';
 
@@ -27,7 +28,8 @@ export const PositioningStage: React.FC = () => {
     brandMemory, 
     updatePositioning, 
     advanceToNextStage, 
-    generatePositioning
+    generatePositioning,
+    isProcessing
   } = useBrand();
 
   const { positioning } = brandMemory;
@@ -173,17 +175,29 @@ export const PositioningStage: React.FC = () => {
           <div className="flex items-center gap-3">
             <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
             <div className="space-y-0.5">
-              <span className="font-semibold text-xs block text-rose-300">Positioning Generation Failed</span>
+              <span className="font-semibold text-xs block text-rose-300">
+                {stageStatus.errorCategory === 'QUOTA'
+                  ? 'Groq AI Quota Exhausted'
+                  : stageStatus.errorCategory === 'RATE_LIMIT'
+                  ? 'Groq Rate Limit Exceeded'
+                  : 'Positioning Generation Failed'}
+              </span>
               <span className="text-xs text-rose-200/90">
                 {stageStatus.lastError || 'Unable to generate strategic territories. Please try again.'}
               </span>
+              {stageStatus.errorCategory === 'QUOTA' && (
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  AI provider credits or quota limit reached on Groq account.
+                </span>
+              )}
             </div>
           </div>
           <button
             onClick={() => generatePositioning()}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0"
+            disabled={isProcessing}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
             <span>Retry Positioning</span>
           </button>
         </div>
@@ -368,25 +382,77 @@ export const PositioningStage: React.FC = () => {
       </div>
 
       {/* Active Position Statement Bar */}
-      <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span>Position locked in Brand Memory</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          </div>
-          <p className="text-xs text-[#8a8175]">
-            {positioning.positioningStatement || 'Next, we crystallize the human personality constellation that embodies this position.'}
-          </p>
-        </div>
+      {(() => {
+        const isReady = stageStatus?.status === 'ready';
+        const isGenerating = stageStatus?.status === 'generating';
+        const isError = stageStatus?.status === 'error';
+        const hasValidPositioning = !!positioning.category && !!positioning.positioningStatement && isReady;
+        const canAdvance = isReady && hasValidPositioning;
 
-        <button
-          onClick={advanceToNextStage}
-          className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
-        >
-          <span>Shape brand personality</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+        return (
+          <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            {canAdvance ? (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <span>Position locked in Brand Memory</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    {positioning.positioningStatement || 'Next, we crystallize the human personality constellation that embodies this position.'}
+                  </p>
+                </div>
+
+                <button
+                  onClick={advanceToNextStage}
+                  className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <span>Shape brand personality</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#a0988e]">
+                    <span>{isError ? 'Positioning Generation Incomplete' : isGenerating ? 'Mapping Strategic Coordinates...' : 'Positioning Required'}</span>
+                    <span className={`w-2 h-2 rounded-full ${isError ? 'bg-rose-500' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-[#7d7468]'}`} />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    {isError 
+                      ? 'Resolve positioning errors before advancing to Personality.'
+                      : isGenerating 
+                      ? 'Groq is synthesizing the category wedge and positioning territories...'
+                      : 'Lock in positioning coordinates before proceeding to Personality.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {isError && (
+                    <button
+                      onClick={() => generatePositioning()}
+                      disabled={isGenerating}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 font-semibold text-xs rounded-full transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                      <span>Retry Positioning</span>
+                    </button>
+                  )}
+                  <button
+                    disabled={true}
+                    title="Complete positioning stage before proceeding to Personality"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-white/5 text-[#7d7468] font-semibold text-xs rounded-full cursor-not-allowed border border-white/5 opacity-50"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Shape brand personality (Locked)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
 
       {/* Edit Modal */}
       {isEditModalOpen && (

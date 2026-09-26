@@ -17,7 +17,8 @@ import {
   ChevronUp,
   Sliders,
   BookmarkCheck,
-  Target
+  Target,
+  Lock
 } from 'lucide-react';
 import type { NameCandidate, NamingTerritory, NamingWorld } from '../../../types/brand';
 
@@ -81,12 +82,20 @@ export const NamingStage: React.FC = () => {
   const [filterMode, setFilterMode] = useState<'world' | 'shortlist' | 'all'>('world');
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
 
+  const isReady = stageStatus?.status === 'ready';
+  const isGenerating = stageStatus?.status === 'generating';
+  const isError = stageStatus?.status === 'error';
+  const hasValidNaming = ((naming.candidates && naming.candidates.length > 0) || (naming.territories && naming.territories.length > 0)) && isReady;
+  const canEnterVisualize = isReady && hasValidNaming;
+
   // All candidates pool
   const allCandidates: NameCandidate[] = (naming.candidates && naming.candidates.length > 0)
     ? naming.candidates
     : naming.territories.flatMap(t => t.candidates);
 
-  const selectedCandidate = naming.selectedName || allCandidates.find(c => c.id === naming.selectedNameId) || allCandidates[0];
+  const selectedCandidate = hasValidNaming
+    ? (naming.selectedName || allCandidates.find(c => c.id === naming.selectedNameId) || allCandidates[0] || null)
+    : null;
   const shortlistedIds = new Set(naming.shortlistedCandidateIds || []);
 
   // Filtered candidate list based on active mode
@@ -122,7 +131,16 @@ export const NamingStage: React.FC = () => {
           </div>
 
           <div className="text-xs text-[#8a8175] font-mono">
-            Active Mark: <span className="text-white font-semibold">{selectedCandidate?.name || 'SprintForge'}</span>
+            Active Mark:{' '}
+            {isReady && selectedCandidate ? (
+              <span className="text-white font-semibold">{selectedCandidate.name}</span>
+            ) : isGenerating ? (
+              <span className="text-amber-400 font-semibold animate-pulse">Generating...</span>
+            ) : isError ? (
+              <span className="text-rose-400 font-semibold">Generation Failed</span>
+            ) : (
+              <span className="text-[#8a8175] italic">None selected</span>
+            )}
           </div>
         </div>
 
@@ -135,22 +153,34 @@ export const NamingStage: React.FC = () => {
       </div>
 
       {/* Controlled Stage Error Banner */}
-      {stageStatus?.status === 'error' && (
+      {isError && (
         <div className="mt-4 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
             <div className="space-y-0.5">
-              <span className="font-semibold text-xs block text-rose-300">Naming Generation Failed</span>
+              <span className="font-semibold text-xs block text-rose-300">
+                {stageStatus.errorCategory === 'QUOTA'
+                  ? 'Groq AI Quota Exhausted'
+                  : stageStatus.errorCategory === 'RATE_LIMIT'
+                  ? 'Groq Rate Limit Exceeded'
+                  : 'Naming Generation Failed'}
+              </span>
               <span className="text-xs text-rose-200/90">
                 {stageStatus.lastError || 'Unable to generate strategic naming worlds. Please try again.'}
               </span>
+              {stageStatus.errorCategory === 'QUOTA' && (
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  AI provider credits or quota limit reached on Groq account.
+                </span>
+              )}
             </div>
           </div>
           <button
             onClick={() => generateNaming()}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0"
+            disabled={isGenerating}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
             <span>Retry Naming</span>
           </button>
         </div>
@@ -355,17 +385,37 @@ export const NamingStage: React.FC = () => {
           </div>
 
           {displayedCandidates.length === 0 ? (
-            <div className="p-8 rounded-3xl spatial-surface text-center space-y-2 border border-white/[0.06]">
-              <p className="text-sm text-[#a0988e]">No candidates match this filter.</p>
-              {filterMode === 'shortlist' && (
+            isError ? (
+              <div className="p-8 rounded-3xl spatial-surface text-center space-y-3 border border-rose-500/20 bg-rose-500/5">
+                <AlertTriangle className="w-8 h-8 text-rose-400 mx-auto" />
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-rose-200">Naming Generation Failed</p>
+                  <p className="text-xs text-[#a0988e] max-w-md mx-auto">
+                    {stageStatus?.lastError || 'Unable to generate strategic naming worlds. Please retry generation to continue.'}
+                  </p>
+                </div>
                 <button
-                  onClick={() => setFilterMode('world')}
-                  className="text-xs text-amber-400 hover:underline font-mono"
+                  onClick={() => generateNaming()}
+                  disabled={isGenerating}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-mono transition-colors disabled:opacity-50"
                 >
-                  Return to Naming Worlds to shortlist candidates →
+                  <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                  <span>Retry Naming</span>
                 </button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="p-8 rounded-3xl spatial-surface text-center space-y-2 border border-white/[0.06]">
+                <p className="text-sm text-[#a0988e]">No candidates match this filter.</p>
+                {filterMode === 'shortlist' && (
+                  <button
+                    onClick={() => setFilterMode('world')}
+                    className="text-xs text-amber-400 hover:underline font-mono"
+                  >
+                    Return to Naming Worlds to shortlist candidates →
+                  </button>
+                )}
+              </div>
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {displayedCandidates.map((cand) => {
@@ -526,23 +576,64 @@ export const NamingStage: React.FC = () => {
 
       {/* Action Advance Bar */}
       <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span>Wordmark confirmed in Brand Memory</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          </div>
-          <p className="text-xs text-[#8a8175]">
-            Next, we enter the Visual Studio to sculpt colors, typography, materials, and form.
-          </p>
-        </div>
+        {canEnterVisualize ? (
+          <>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <span>Wordmark confirmed in Brand Memory</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              </div>
+              <p className="text-xs text-[#8a8175]">
+                Next, we enter the Visual Studio to sculpt colors, typography, materials, and form.
+              </p>
+            </div>
 
-        <button
-          onClick={advanceToNextStage}
-          className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
-        >
-          <span>Enter Visual Studio</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
+            <button
+              onClick={advanceToNextStage}
+              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
+            >
+              <span>Enter Visual Studio</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#a0988e]">
+                <span>{isError ? 'Naming Generation Incomplete' : isGenerating ? 'Synthesizing Naming Worlds...' : 'Naming Generation Required'}</span>
+                <span className={`w-2 h-2 rounded-full ${isError ? 'bg-rose-500' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-[#7d7468]'}`} />
+              </div>
+              <p className="text-xs text-[#8a8175]">
+                {isError 
+                  ? 'Resolve naming generation errors and confirm a wordmark to unlock Visual Studio.'
+                  : isGenerating 
+                  ? 'Groq is currently synthesizing naming worlds and strategic candidates...'
+                  : 'Generate and confirm a brand name before advancing to Visual Studio.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {isError && (
+                <button
+                  onClick={() => generateNaming()}
+                  disabled={isGenerating}
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 font-semibold text-xs rounded-full transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                  <span>Retry Naming</span>
+                </button>
+              )}
+              <button
+                disabled={true}
+                title="Complete naming stage before advancing to Visual Studio"
+                className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-white/5 text-[#7d7468] font-semibold text-xs rounded-full cursor-not-allowed border border-white/5 opacity-50"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Enter Visual Studio (Locked)</span>
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

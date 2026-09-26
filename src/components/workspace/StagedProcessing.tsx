@@ -2,16 +2,74 @@ import React from 'react';
 import { useBrand } from '../../context/BrandContext';
 import { BrandNucleus } from '../canvas/BrandNucleus';
 import { Check, Sparkles } from 'lucide-react';
+import type { StageId } from '../../types/brand';
+
+interface StageProcessingMeta {
+  tag: string;
+  title: string;
+  description: string;
+  footerNote: string;
+  shape: 'icosahedron' | 'knot' | 'torus' | 'octahedron';
+  accentColor: string;
+}
+
+const STAGE_META: Record<string, StageProcessingMeta> = {
+  discover: {
+    tag: 'NUCLEUS FORMATION IN PROGRESS',
+    title: 'UNDERSTANDING YOUR IDEA',
+    description: 'Extracting deep behavioral tensions and structuring relational brand nodes.',
+    footerNote: 'Constructing spatial relationship map...',
+    shape: 'icosahedron',
+    accentColor: '#e0a96d',
+  },
+  position: {
+    tag: 'COMPETITIVE WEDGES IN PROGRESS',
+    title: 'ARCHITECTING STRATEGIC POSITION',
+    description: 'Exploring unoccupied territory and plotting 2D strategic coordinates.',
+    footerNote: 'Synthesizing defensible positioning statement...',
+    shape: 'octahedron',
+    accentColor: '#d97706',
+  },
+  personality: {
+    tag: 'TONAL SPECTRUM IN PROGRESS',
+    title: 'CALIBRATING BRAND VOICE & TRAITS',
+    description: 'Formulating core behavioral traits, writing samples, and tone rules.',
+    footerNote: 'Locking brand principles and spectrum dimensions...',
+    shape: 'knot',
+    accentColor: '#ec4899',
+  },
+  naming: {
+    tag: 'NAMING ENGINE IN PROGRESS',
+    title: 'EXPLORING VERBAL IDENTITY WORLDS',
+    description: 'Synthesizing naming worlds, phonetic archetypes, and diagnostic audits.',
+    footerNote: 'Running 8-factor linguistic and risk evaluation...',
+    shape: 'torus',
+    accentColor: '#d4af37',
+  },
+  visualize: {
+    tag: 'CREATIVE DIRECTION IN PROGRESS',
+    title: 'SCULPTING VISUAL IDENTITY SYSTEM',
+    description: 'Harmonizing color palettes, typography systems, and art direction.',
+    footerNote: 'Calibrating 7-role color tokens and typographic pairings...',
+    shape: 'icosahedron',
+    accentColor: '#10b981',
+  },
+  challenge: {
+    tag: 'ADVERSARIAL CRITIQUE IN PROGRESS',
+    title: 'STRESS-TESTING BRAND SYSTEM',
+    description: 'Running multi-vector adversarial audits across positioning, voice, and viability.',
+    footerNote: 'Evaluating unearned claims and category tension...',
+    shape: 'knot',
+    accentColor: '#f43f5e',
+  },
+};
 
 export const StagedProcessing: React.FC = () => {
-  const { processingSteps, currentProcessingStepIndex } = useBrand();
+  const { processingSteps, currentProcessingStepIndex, generatingStage, currentStage } = useBrand();
 
-  const stepsList = [
-    { label: 'Extracting the core structural problem', key: 0 },
-    { label: 'Finding the high-intent audience profile', key: 1 },
-    { label: 'Testing assumptions and hidden risks', key: 2 },
-    { label: 'Mapping contextual workarounds & friction', key: 3 },
-  ];
+  const activeStage: StageId = generatingStage || currentStage || 'discover';
+  const meta: StageProcessingMeta = STAGE_META[activeStage] || STAGE_META.discover;
+  const steps = processingSteps && processingSteps.length > 0 ? processingSteps : [];
 
   return (
     <div className="relative min-h-[85vh] flex flex-col items-center justify-center px-4 sm:px-6 py-12 text-[#f4efe8] text-center">
@@ -20,8 +78,8 @@ export const StagedProcessing: React.FC = () => {
         <BrandNucleus
           stage="processing"
           speedMultiplier={1.8}
-          shape={currentProcessingStepIndex > 2 ? 'knot' : 'icosahedron'}
-          accentColor="#e0a96d"
+          shape={meta.shape}
+          accentColor={meta.accentColor}
           className="w-full h-full max-w-4xl max-h-[70vh]"
           showLabels={false}
         />
@@ -30,31 +88,31 @@ export const StagedProcessing: React.FC = () => {
       {/* Foreground Staged Content */}
       <div className="relative z-10 max-w-xl mx-auto space-y-8 pointer-events-auto">
         <div className="space-y-3">
-          <div className="inline-flex items-center gap-2 text-xs font-mono text-[#d4af37] tracking-widest uppercase">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>NUCLEUS FORMATION IN PROGRESS</span>
+          <div className="inline-flex items-center gap-2 text-xs font-mono tracking-widest uppercase" style={{ color: meta.accentColor }}>
+            <Sparkles className="w-3.5 h-3.5 animate-spin" />
+            <span>{meta.tag}</span>
           </div>
 
           <h2 className="text-3xl sm:text-5xl font-serif-editorial text-white tracking-tight">
-            UNDERSTANDING YOUR IDEA
+            {meta.title}
           </h2>
 
           <p className="text-xs text-[#a0988e] font-light max-w-md mx-auto">
-            Extracting deep behavioral tensions and structuring relational brand nodes.
+            {meta.description}
           </p>
         </div>
 
-        {/* Staged Reasoning List */}
+        {/* Dynamic Staged Reasoning List */}
         <div className="p-6 rounded-3xl spatial-surface border border-white/10 shadow-2xl space-y-4 text-left">
-          {stepsList.map((step, idx) => {
-            const isCompleted = idx < currentProcessingStepIndex;
-            const isCurrent = idx === currentProcessingStepIndex;
-            const isPending = idx > currentProcessingStepIndex;
+          {steps.map((step, idx) => {
+            const isCompleted = step.status === 'completed' || idx < currentProcessingStepIndex;
+            const isCurrent = step.status === 'active' || idx === currentProcessingStepIndex;
+            const isPending = !isCompleted && !isCurrent;
 
             return (
               <div
-                key={step.key}
-                className={`flex items-center justify-between gap-4 py-2 border-b border-white/[0.05] last:border-none transition-all duration-500 ${
+                key={step.id || idx}
+                className={`flex items-center justify-between gap-4 py-2 border-b border-white/[0.05] last:border-none transition-all duration-300 ${
                   isPending ? 'opacity-30' : 'opacity-100'
                 }`}
               >
@@ -93,7 +151,7 @@ export const StagedProcessing: React.FC = () => {
         </div>
 
         <div className="text-xs font-mono text-[#8a8175]">
-          Constructing spatial relationship map...
+          {meta.footerNote}
         </div>
       </div>
     </div>

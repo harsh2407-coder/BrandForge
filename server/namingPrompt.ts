@@ -32,7 +32,7 @@ CRITICAL RULES:
    - A Naming World is an imaginative thematic island with a distinct linguistic construction logic, emotional territory, and strategic trade-off.
    - Do NOT use the same universal world categories for every brand.
 3. CANDIDATE DIVERSITY & VOLUME:
-   - Generate between 12 and 20 total candidate names across the worlds (approximately 3 to 5 candidates per world).
+   - Generate between 8 and 12 high-conviction candidate names distributed across 3 distinct Naming Worlds (2 to 4 candidates per world).
    - Ensure meaningful structural diversity: metaphorical names, compound words, coined/invented terms, active verbs, and evocative nouns.
 4. RIGOROUS DIAGNOSTIC EVALUATION (0-100 SCALE):
    - Every candidate must receive 8 individual diagnostic scores (0 to 100):
@@ -147,7 +147,7 @@ export const NAMING_SCHEMA = {
         ],
         additionalProperties: false,
       },
-      description: '12 to 20 evaluated candidate brand names spread across the Naming Worlds.',
+      description: '8 to 12 evaluated candidate brand names spread across the Naming Worlds.',
     },
   },
   required: ['namingStrategy', 'namingBrief', 'namingWorlds', 'candidates'],
@@ -213,25 +213,11 @@ export function buildNamingPrompt(
     });
   }
 
-  if (personality.brandPrinciples && personality.brandPrinciples.length > 0) {
-    prompt += `Brand Principles:\n`;
-    personality.brandPrinciples.forEach((bp, i) => {
-      prompt += `  ${i + 1}. ${bp.name}: ${bp.statement} (Implication: ${bp.implication})\n`;
-    });
-  }
-
-  if (personality.dimensions && personality.dimensions.length > 0) {
-    prompt += `Personality Spectrums:\n`;
-    personality.dimensions.forEach((d, i) => {
-      prompt += `  ${i + 1}. ${d.dimension}: ${d.value}% (${d.lowLabel} <-> ${d.highLabel})\n`;
-    });
-  }
-
   prompt += `\nTASK:
 Based strictly on the strategic confluence of Discovery, Positioning, and Personality:
 1. Synthesize a concise, sharp Naming Strategy and Creative Brief.
-2. Architect 3 to 5 distinct Naming Worlds (creative territories) with deep thematic logic and explicit tradeoffs.
-3. Generate 12 to 20 candidate wordmarks (3 to 5 per world) demonstrating linguistic diversity (metaphor, compound, coined, action).
+2. Architect 3 distinct Naming Worlds (creative territories) with deep thematic logic and explicit tradeoffs.
+3. Generate 8 to 12 high-conviction candidate wordmarks (2 to 4 per world) demonstrating linguistic diversity (metaphor, compound, coined, action).
 4. Conduct an objective 8-factor diagnostic evaluation (0-100) and articulate concrete risks for each candidate.
 5. GROUNDING MANDATE: Do NOT invent unbuilt capabilities, verified databases, exclusive partnerships, or guarantees. If referencing capabilities, describe them as strategic directions or future ambitions.
 6. Strictly adhere to the anti-generic rules (no cliché "-ify", "-ly", fake Latin syllables) and do NOT claim trademark/domain verification.

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { groqGateway } from './groqGateway.js';
+import { groqGateway, classifyGroqError } from './groqGateway.js';
 
 export const apiRouter = Router();
 
@@ -346,12 +346,14 @@ apiRouter.post('/generate-stage', async (req: Request, res: Response) => {
       });
     }
   } catch (err: any) {
-    console.error('[API /api/generate-stage Error]:', err.message || err);
-    const safeMessage = err.message || 'An unexpected error occurred during AI generation.';
-    return res.status(500).json({
+    const classified = classifyGroqError(err);
+    console.error(`[API /api/generate-stage Error] [${classified.category} - ${classified.statusCode}]:`, classified.message);
+    return res.status(classified.statusCode).json({
       success: false,
       stage: req.body?.stage || 'discover',
-      error: safeMessage,
+      error: classified.message,
+      category: classified.category,
+      retryAfter: classified.retryAfter,
     });
   }
 });

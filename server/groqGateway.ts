@@ -44,7 +44,8 @@ import type {
   ChallengeCategory,
   ChallengeSeverity,
   LaunchData,
-  StageId
+  StageId,
+  ErrorCategory
 } from '../src/types/brand.js';
 
 export interface GenerateDiscoveryInput {
@@ -114,6 +115,169 @@ export const ALLOWED_CHALLENGE_MUTATION_FIELDS: Record<string, string[]> = {
   launch: ['headline', 'subheadline', 'oneLinePitch']
 };
 
+export class StageGenerationError extends Error {
+  public readonly isRetryable: boolean;
+
+  constructor(
+    message: string,
+    public readonly category: ErrorCategory,
+    public readonly statusCode: number = 500,
+    public readonly retryAfter?: number
+  ) {
+    super(message);
+    this.name = 'StageGenerationError';
+    this.isRetryable = category === 'RATE_LIMIT' || category === 'NETWORK_ERROR' || category === 'PROVIDER_ERROR';
+  }
+}
+
+export function classifyGroqError(err: any): StageGenerationError {
+  if (err instanceof StageGenerationError) {
+    return err;
+  }
+
+  const status = err?.status || err?.statusCode || (err?.error?.status) || 500;
+  const rawMsg = err?.message || String(err || '');
+  const code = err?.code || '';
+  const sanitized = rawMsg.replace(/gsk_[a-zA-Z0-9_-]+/g, '[REDACTED]');
+  const lowerMsg = sanitized.toLowerCase();
+
+  // Retry-after header or error message match if present
+  let retryAfter: number | undefined;
+  const headerVal = err?.headers?.get ? err.headers.get('retry-after') : err?.headers?.['retry-after'];
+  if (headerVal) {
+    const parsedSec = parseInt(headerVal, 10);
+    if (!isNaN(parsedSec) && parsedSec > 0) retryAfter = parsedSec;
+  }
+  if (!retryAfter) {
+    const match = rawMsg.match(/try again in ([0-9.]+)\s*s/i) || rawMsg.match(/retry.*after\s+([0-9.]+)\s*s/i);
+    if (match) {
+      const parsed = parseFloat(match[1]);
+      if (!isNaN(parsed) && parsed > 0) retryAfter = Math.ceil(parsed);
+    }
+  }
+
+  // 1. Validation Error (Schema mismatch, JSON parse error, malformed structure from model)
+  if (
+    err instanceof SyntaxError ||
+    err?.name === 'SyntaxError' ||
+    lowerMsg.includes('syntaxerror') ||
+    lowerMsg.includes('unexpected token') ||
+    (lowerMsg.includes('json') && lowerMsg.includes('position')) ||
+    lowerMsg.includes('malformed json') ||
+    lowerMsg.includes('invalid discovery data') ||
+    lowerMsg.includes('invalid positioning data') ||
+    lowerMsg.includes('invalid personality data') ||
+    lowerMsg.includes('invalid naming data') ||
+    lowerMsg.includes('invalid visual data') ||
+    lowerMsg.includes('invalid challenge data') ||
+    lowerMsg.includes('invalid deliver data') ||
+    lowerMsg.includes('json parse') ||
+    lowerMsg.includes('schema')
+  ) {
+    return new StageGenerationError(
+      sanitized || 'AI generation returned an incomplete or invalid structure. Please retry.',
+      'VALIDATION_ERROR',
+      422
+    );
+  }
+
+  // 2. Quota Exhaustion
+  if (
+    status === 402 ||
+    (status === 429 && (
+      lowerMsg.includes('quota') || 
+      lowerMsg.includes('insufficient_quota') || 
+      lowerMsg.includes('credit') || 
+      lowerMsg.includes('billing') ||
+      lowerMsg.includes('hard limit')
+    )) ||
+    lowerMsg.includes('exceeded your current quota')
+  ) {
+    return new StageGenerationError(
+      'Groq AI organization quota or credit limit exhausted. Please check your Groq billing tier or credit balance.',
+      'QUOTA',
+      429,
+      retryAfter
+    );
+  }
+
+  // 3. Rate Limit (TPM / RPM / Rate Limit Exceeded)
+  if (
+    status === 429 ||
+    lowerMsg.includes('rate limit') ||
+    lowerMsg.includes('rate_limit_exceeded') ||
+    lowerMsg.includes('tokens per minute') ||
+    lowerMsg.includes('requests per minute') ||
+    lowerMsg.includes('tpm') ||
+    lowerMsg.includes('rpm') ||
+    lowerMsg.includes('too many requests') ||
+    (lowerMsg.includes('request too large') && lowerMsg.includes('tokens'))
+  ) {
+    const waitMsg = retryAfter ? ` Please wait ${retryAfter}s before retrying.` : ' Please wait a moment before trying again.';
+    return new StageGenerationError(
+      `Groq rate limit reached (requests or tokens per minute).${waitMsg}`,
+      'RATE_LIMIT',
+      429,
+      retryAfter
+    );
+  }
+
+  // 4. Network Failure / Timeout
+  if (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ENOTFOUND' ||
+    code === 'ECONNREFUSED' ||
+    code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    err?.name === 'FetchError' ||
+    err?.name === 'AbortError' ||
+    lowerMsg.includes('network') ||
+    lowerMsg.includes('timeout') ||
+    lowerMsg.includes('socket hang up')
+  ) {
+    return new StageGenerationError(
+      'Network connection to the AI provider timed out. Please check your internet connection and retry.',
+      'NETWORK_ERROR',
+      504
+    );
+  }
+
+  // 5. Provider Error (Downtime / Server 5xx)
+  const httpStatus = err?.status || err?.statusCode || (err?.error?.status);
+  if (httpStatus && httpStatus >= 500 && httpStatus <= 504) {
+    return new StageGenerationError(
+      'The Groq AI service is currently experiencing high demand or temporary downtime. Please try again in a few moments.',
+      'PROVIDER_ERROR',
+      503
+    );
+  }
+
+  // 6. Auth Failure
+  if (status === 401 || status === 403) {
+    return new StageGenerationError(
+      'Groq authentication failed. Please verify your GROQ_API_KEY in .env.local.',
+      'UNKNOWN',
+      401
+    );
+  }
+
+  return new StageGenerationError(
+    `Groq generation failed: ${sanitized}`,
+    'UNKNOWN',
+    status >= 400 && status < 600 ? status : 500
+  );
+}
+
+export const STAGE_COMPLETION_BUDGETS = {
+  discovery: 3000,
+  positioning: 4000,
+  personality: 4500,
+  naming: 4500,
+  visualize: 4500,
+  challenge: 4500,
+  deliver: 3500,
+} as const;
+
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 
 export class GroqGateway {
@@ -131,14 +295,17 @@ export class GroqGateway {
   }
 
   private async callModelWithSchema(
+    stageName: string,
     systemInstruction: string, 
     userPrompt: string, 
     schemaName: string, 
     schema: any,
-    maxCompletionTokens: number = 8192
+    maxCompletionTokens: number = 3000,
+    temperature: number = 0.4
   ): Promise<string> {
     const client = this.getClient();
     let lastError: any = null;
+    const startMs = Date.now();
 
     // Attempt 1: Strict JSON Schema Structured Output
     try {
@@ -156,12 +323,17 @@ export class GroqGateway {
             schema
           }
         },
-        temperature: 0.4,
+        temperature,
         max_completion_tokens: maxCompletionTokens
       });
 
       const content = response.choices?.[0]?.message?.content?.trim();
-      if (content) return content;
+      if (content) {
+        const durationMs = Date.now() - startMs;
+        const usage = response.usage;
+        console.log(`[GroqGateway] stage="${stageName}" inputTokens=${usage?.prompt_tokens ?? 'N/A'} maxBudget=${maxCompletionTokens} outputTokens=${usage?.completion_tokens ?? 'N/A'} totalTokens=${usage?.total_tokens ?? 'N/A'} duration=${durationMs}ms status=SUCCESS`);
+        return content;
+      }
     } catch (err: any) {
       lastError = err;
       const status = err?.status || err?.statusCode || (err?.error?.status);
@@ -177,39 +349,74 @@ export class GroqGateway {
               { role: 'user', content: userPrompt }
             ],
             response_format: { type: 'json_object' },
-            temperature: 0.4,
+            temperature,
             max_completion_tokens: maxCompletionTokens
           });
 
           const fbContent = fallbackResp.choices?.[0]?.message?.content?.trim();
-          if (fbContent) return fbContent;
+          if (fbContent) {
+            const durationMs = Date.now() - startMs;
+            const usage = fallbackResp.usage;
+            console.log(`[GroqGateway] stage="${stageName}" inputTokens=${usage?.prompt_tokens ?? 'N/A'} maxBudget=${maxCompletionTokens} outputTokens=${usage?.completion_tokens ?? 'N/A'} totalTokens=${usage?.total_tokens ?? 'N/A'} duration=${durationMs}ms status=SUCCESS fallback=json_object`);
+            return fbContent;
+          }
         } catch (innerErr: any) {
           lastError = innerErr;
         }
       }
     }
 
-    // Handle error classification safely without exposing credentials
-    if (lastError) {
-      const status = lastError?.status || lastError?.statusCode || 500;
-      const msg = lastError?.message || 'Groq request failed';
+    // If rate limited by provider rolling window (e.g. 8000 TPM cooldown), wait and retry up to 2 times
+    let attempts = 0;
+    while (attempts < 2) {
+      const classification = classifyGroqError(lastError);
+      if (classification.category !== 'RATE_LIMIT') break;
+      attempts++;
+      const waitSec = Math.max(10, Math.min(25, (classification.retryAfter || 12) * attempts));
+      console.log(`[GroqGateway] stage="${stageName}" encountered rolling TPM limit (attempt ${attempts}/2). Waiting ${waitSec}s for window recovery before automatic retry...`);
+      await new Promise(r => setTimeout(r, (waitSec + 1) * 1000));
+      try {
+        const retryResp = await client.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [
+            { role: 'system', content: `${systemInstruction}\nYou MUST return strictly valid JSON matching the schema.` },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: schemaName,
+              strict: true,
+              schema
+            }
+          },
+          temperature,
+          max_completion_tokens: maxCompletionTokens
+        });
 
-      if (status === 401 || status === 403) {
-        throw new Error('Groq authentication failed. Please verify your GROQ_API_KEY in .env.local.');
+        const retryContent = retryResp.choices?.[0]?.message?.content?.trim();
+        if (retryContent) {
+          const durationMs = Date.now() - startMs;
+          const usage = retryResp.usage;
+          console.log(`[GroqGateway] stage="${stageName}" inputTokens=${usage?.prompt_tokens ?? 'N/A'} maxBudget=${maxCompletionTokens} outputTokens=${usage?.completion_tokens ?? 'N/A'} totalTokens=${usage?.total_tokens ?? 'N/A'} duration=${durationMs}ms status=SUCCESS retry=auto_tpm_recovery attempt=${attempts}`);
+          return retryContent;
+        }
+      } catch (retryErr: any) {
+        lastError = retryErr;
       }
-      if (status === 429) {
-        throw new Error('Groq rate limit or quota exceeded. Please wait a moment before trying again.');
-      }
-      if (status >= 500) {
-        throw new Error('The Groq service is currently experiencing high demand or temporary downtime. Please try again in a few moments.');
-      }
-
-      // Sanitize any potential key leakage from raw message
-      const sanitized = msg.replace(/gsk_[a-zA-Z0-9_-]+/g, '[REDACTED]');
-      throw new Error(`Groq generation failed: ${sanitized}`);
     }
 
-    throw new Error('Groq generation failed: No content returned by the model.');
+    const durationMs = Date.now() - startMs;
+    // Handle error classification safely without exposing credentials
+    if (lastError) {
+      const classified = classifyGroqError(lastError);
+      console.error(`[GroqGateway] stage="${stageName}" maxBudget=${maxCompletionTokens} duration=${durationMs}ms status=FAILED errorCategory=${classified.category} statusCode=${classified.statusCode}`);
+      throw classified;
+    }
+
+    const unkErr = new StageGenerationError('Groq generation failed: No content returned by the model.', 'UNKNOWN', 500);
+    console.error(`[GroqGateway] stage="${stageName}" maxBudget=${maxCompletionTokens} duration=${durationMs}ms status=FAILED errorCategory=UNKNOWN statusCode=500`);
+    throw unkErr;
   }
 
   async generateDiscovery(input: GenerateDiscoveryInput): Promise<DiscoveryData> {
@@ -220,10 +427,12 @@ export class GroqGateway {
 
     const prompt = buildDiscoveryPrompt(roughIdea, knownDetails);
     const rawText = await this.callModelWithSchema(
+      'discovery',
       DISCOVERY_SYSTEM_INSTRUCTION,
       prompt,
       'discovery_schema',
-      DISCOVERY_SCHEMA
+      DISCOVERY_SCHEMA,
+      STAGE_COMPLETION_BUDGETS.discovery
     );
 
     return this.validateAndNormalizeDiscovery(rawText);
@@ -322,10 +531,12 @@ export class GroqGateway {
 
     const prompt = buildPositioningPrompt(roughIdea, discovery, projectName);
     const rawText = await this.callModelWithSchema(
+      'positioning',
       POSITIONING_SYSTEM_INSTRUCTION,
       prompt,
       'positioning_schema',
-      POSITIONING_SCHEMA
+      POSITIONING_SCHEMA,
+      STAGE_COMPLETION_BUDGETS.positioning
     );
 
     return this.validateAndNormalizePositioning(rawText);
@@ -449,11 +660,12 @@ export class GroqGateway {
 
     const prompt = buildPersonalityPrompt(roughIdea, discovery, positioning, projectName);
     const rawText = await this.callModelWithSchema(
+      'personality',
       PERSONALITY_SYSTEM_INSTRUCTION,
       prompt,
       'personality_schema',
       PERSONALITY_SCHEMA,
-      8192
+      STAGE_COMPLETION_BUDGETS.personality
     );
 
     return this.validateAndNormalizePersonality(rawText);
@@ -638,11 +850,12 @@ export class GroqGateway {
 
     const prompt = buildNamingPrompt(roughIdea, discovery, positioning, personality, projectName);
     const rawText = await this.callModelWithSchema(
+      'naming',
       NAMING_SYSTEM_INSTRUCTION,
       prompt,
       'naming_schema',
       NAMING_SCHEMA,
-      8192
+      STAGE_COMPLETION_BUDGETS.naming
     );
 
     return this.validateAndNormalizeNaming(rawText);
@@ -841,11 +1054,12 @@ export class GroqGateway {
 
     const prompt = buildVisualPrompt(roughIdea, discovery, positioning, personality, naming, projectName);
     const rawText = await this.callModelWithSchema(
+      'visualize',
       VISUAL_SYSTEM_INSTRUCTION,
       prompt,
       'visual_schema',
       VISUAL_SCHEMA,
-      8192
+      STAGE_COMPLETION_BUDGETS.visualize
     );
 
     return this.validateAndNormalizeVisualData(rawText);
@@ -1172,32 +1386,18 @@ export class GroqGateway {
   }
 
   async generateChallenge(input: GenerateChallengeInput): Promise<ChallengeData> {
-    const groq = this.getClient();
     const prompt = buildChallengePrompt(input);
+    const rawText = await this.callModelWithSchema(
+      'challenge',
+      CHALLENGE_SYSTEM_INSTRUCTION,
+      prompt,
+      'brand_challenge',
+      CHALLENGE_SCHEMA,
+      STAGE_COMPLETION_BUDGETS.challenge,
+      0.3
+    );
 
-    const completion = await groq.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        { role: 'system', content: CHALLENGE_SYSTEM_INSTRUCTION },
-        { role: 'user', content: prompt },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'brand_challenge',
-          schema: CHALLENGE_SCHEMA,
-        },
-      },
-      temperature: 0.3,
-      max_completion_tokens: 8192,
-    });
-
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('Groq returned empty response for Challenge generation.');
-    }
-
-    return this.validateAndNormalizeChallengeData(content, input);
+    return this.validateAndNormalizeChallengeData(rawText, input);
   }
 
   validateAndNormalizeChallengeData(raw: any, _memory?: any): ChallengeData {
@@ -1397,32 +1597,18 @@ export class GroqGateway {
   }
 
   async generateDeliver(input: GenerateDeliverInput): Promise<LaunchData & { executiveSummary?: string; brandEssence?: string }> {
-    const groq = this.getClient();
     const prompt = buildDeliverPrompt(input);
+    const rawText = await this.callModelWithSchema(
+      'deliver',
+      DELIVER_SYSTEM_INSTRUCTION,
+      prompt,
+      'brand_deliver',
+      DELIVER_SCHEMA,
+      STAGE_COMPLETION_BUDGETS.deliver,
+      0.35
+    );
 
-    const completion = await groq.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        { role: 'system', content: DELIVER_SYSTEM_INSTRUCTION },
-        { role: 'user', content: prompt },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'brand_deliver',
-          schema: DELIVER_SCHEMA,
-        },
-      },
-      temperature: 0.35,
-      max_completion_tokens: 4096,
-    });
-
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('Groq returned empty response for Deliver generation.');
-    }
-
-    return this.validateAndNormalizeDeliverData(content);
+    return this.validateAndNormalizeDeliverData(rawText);
   }
 
   validateAndNormalizeDeliverData(raw: any): LaunchData & { executiveSummary?: string; brandEssence?: string } {

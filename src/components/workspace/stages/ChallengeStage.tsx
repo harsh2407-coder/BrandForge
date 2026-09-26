@@ -14,7 +14,8 @@ import {
   Pencil, 
   Sparkles,
   Layers,
-  Flame
+  Flame,
+  Lock
 } from 'lucide-react';
 import { EditFieldModal } from '../../shared/EditFieldModal';
 
@@ -85,6 +86,40 @@ export const ChallengeStage: React.FC = () => {
           <span className="text-emerald-400 font-medium">IMPROVE</span>
         </div>
       </div>
+
+      {/* Controlled Stage Error Banner */}
+      {brandMemory.stageExecution?.challenge?.status === 'error' && (
+        <div className="mt-4 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+            <div className="space-y-0.5">
+              <span className="font-semibold text-xs block text-rose-300">
+                {brandMemory.stageExecution.challenge.errorCategory === 'QUOTA'
+                  ? 'Groq AI Quota Exhausted'
+                  : brandMemory.stageExecution.challenge.errorCategory === 'RATE_LIMIT'
+                  ? 'Groq Rate Limit Exceeded'
+                  : 'Brand Critic Stress Test Failed'}
+              </span>
+              <span className="text-xs text-rose-200/90">
+                {brandMemory.stageExecution.challenge.lastError || 'Unable to complete adversarial scan. Please try again.'}
+              </span>
+              {brandMemory.stageExecution.challenge.errorCategory === 'QUOTA' && (
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  AI provider credits or quota limit reached on Groq account.
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => rerunChallenge()}
+            disabled={isProcessing}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
+            <span>Retry Adversarial Scan</span>
+          </button>
+        </div>
+      )}
 
       {/* Central Brand Nucleus with Stress Halo & Materializing Findings */}
       <div className="relative my-8 rounded-3xl spatial-surface border border-white/10 p-6 sm:p-10 shadow-2xl overflow-hidden flex flex-col items-center">
@@ -303,25 +338,78 @@ export const ChallengeStage: React.FC = () => {
       </div>
 
       {/* Action Advance Bar */}
-      <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span>Critic stress test completed</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          </div>
-          <p className="text-xs text-[#8a8175]">
-            Next, we compile the launch distribution copy and open the final Brand Book.
-          </p>
-        </div>
+      {(() => {
+        const stageStatus = brandMemory.stageExecution?.challenge;
+        const isReady = stageStatus?.status === 'ready' || brandMemory.stagesCompleted.includes('challenge');
+        const isGenerating = stageStatus?.status === 'generating' || isProcessing;
+        const isError = stageStatus?.status === 'error';
+        const hasValidChallenge = challenge.findings && challenge.findings.length > 0;
+        const canAdvance = isReady && hasValidChallenge;
 
-        <button
-          onClick={advanceToNextStage}
-          className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
-        >
-          <span>Proceed to Deliver Stage</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+        return (
+          <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            {canAdvance ? (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <span>Critic stress test completed</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    Next, we compile the launch distribution copy and open the final Brand Book.
+                  </p>
+                </div>
+
+                <button
+                  onClick={advanceToNextStage}
+                  className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <span>Proceed to Deliver Stage</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#a0988e]">
+                    <span>{isError ? 'Stress Test Incomplete' : isGenerating ? 'AI Critic Running Scan...' : 'Stress Test Required'}</span>
+                    <span className={`w-2 h-2 rounded-full ${isError ? 'bg-rose-500' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-[#7d7468]'}`} />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    {isError 
+                      ? 'Resolve critique generation errors before proceeding to Deliver.'
+                      : isGenerating 
+                      ? 'AI Critic is currently stress testing brand positioning and finding vulnerabilities...'
+                      : 'Run adversarial critique before proceeding to Deliver.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {isError && (
+                    <button
+                      onClick={() => rerunChallenge()}
+                      disabled={isGenerating}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 font-semibold text-xs rounded-full transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                      <span>Retry Adversarial Scan</span>
+                    </button>
+                  )}
+                  <button
+                    disabled={true}
+                    title="Complete challenge stress test before proceeding to Deliver"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-white/5 text-[#7d7468] font-semibold text-xs rounded-full cursor-not-allowed border border-white/5 opacity-50"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Proceed to Deliver Stage (Locked)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
 
       {/* Edit Finding Modal */}
       {editingFinding && (

@@ -1,9 +1,9 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { BrandMemory, StageId, ProcessingStep, DiscoveryData, PositioningData, PersonalityData, NamingData, VisualData, ChallengeData, ChallengeFinding, ProposedChange, ALLOWED_CHALLENGE_MUTATION_FIELDS, LaunchData, StageExecutionStatus, StageStatus, NameCandidate } from '../types/brand';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { BrandMemory, StageId, ProcessingStep, DiscoveryData, PositioningData, PersonalityData, NamingData, VisualData, ChallengeData, ChallengeFinding, ProposedChange, ALLOWED_CHALLENGE_MUTATION_FIELDS, LaunchData, StageExecutionStatus, StageStatus, NameCandidate, ErrorCategory } from '../types/brand';
 import { DEMO_BRAND } from '../data/demoBrand';
 import { brandEngine } from '../services/brandService';
 
-const STAGE_ORDER: StageId[] = [
+export const STAGE_ORDER: StageId[] = [
   'input',
   'discover',
   'position',
@@ -15,14 +15,36 @@ const STAGE_ORDER: StageId[] = [
   'brand-kit',
 ];
 
+export const canAccessStage = (targetStage: StageId, memory: BrandMemory): boolean => {
+  if (memory.id === 'demo-hackathon-teammates') return true;
+  if (targetStage === 'input') return true;
+  if (targetStage === 'discover') return true;
+
+  const targetIndex = STAGE_ORDER.indexOf(targetStage);
+  if (targetIndex <= 0) return true;
+
+  for (let i = 1; i < targetIndex; i++) {
+    const priorStage = STAGE_ORDER[i];
+    if (priorStage === 'brand-kit') continue;
+    const priorStatus = memory.stageExecution?.[priorStage]?.status;
+    if (priorStatus !== 'ready') {
+      return false;
+    }
+  }
+
+  return true;
+};
+
 interface BrandContextType {
   brandMemory: BrandMemory;
   activeView: 'landing' | 'workspace' | 'brand-kit';
   currentStage: StageId;
   isMemoryOpen: boolean;
   isProcessing: boolean;
+  generatingStage: StageId | null;
   processingSteps: ProcessingStep[];
   currentProcessingStepIndex: number;
+  canAccessStage: (stage: StageId) => boolean;
   setActiveView: (view: 'landing' | 'workspace' | 'brand-kit') => void;
   setCurrentStage: (stage: StageId) => void;
   setIsMemoryOpen: (open: boolean) => void;
@@ -51,7 +73,7 @@ interface BrandContextType {
   updateLaunch: (data: Partial<LaunchData>) => void;
   resetProject: () => void;
   setStageStatus: (stage: StageId, status: StageExecutionStatus) => void;
-  setStageError: (stage: StageId, error: string) => void;
+  setStageError: (stage: StageId, error: string, category?: ErrorCategory, retryAfter?: number) => void;
   clearStageError: (stage: StageId) => void;
 }
 
@@ -205,6 +227,8 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [currentStage, setCurrentStage] = useState<StageId>('input');
   const [isMemoryOpen, setIsMemoryOpen] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [generatingStage, setGeneratingStage] = useState<StageId | null>(null);
+  const inFlightRequests = useRef<Set<StageId>>(new Set());
   const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>(DEFAULT_PROCESSING_STEPS);
   const [currentProcessingStepIndex, setCurrentProcessingStepIndex] = useState<number>(0);
 
@@ -236,16 +260,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveView('workspace');
   };
 
-  const startDiscoveryFromIdea = async (idea: string, details?: string) => {
-    setStageStatus('discover', 'generating');
-    clearStageError('discover');
-    setIsProcessing(true);
-    setProcessingSteps(DEFAULT_PROCESSING_STEPS.map(s => ({ ...s, status: 'pending' })));
-    setCurrentProcessingStepIndex(0);
-
+  const startStepPacing = (steps: ProcessingStep[]) => {
     let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < DEFAULT_PROCESSING_STEPS.length - 1) {
+    return setInterval(() => {
+      if (currentStep < steps.length - 2) {
         currentStep++;
         setCurrentProcessingStepIndex(currentStep);
         setProcessingSteps(prev =>
@@ -255,8 +273,35 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             return { ...step, status: 'pending' };
           })
         );
+      } else if (currentStep === steps.length - 2) {
+        currentStep = steps.length - 1;
+        setCurrentProcessingStepIndex(currentStep);
+        setProcessingSteps(prev =>
+          prev.map((step, i) => {
+            if (i < currentStep) return { ...step, status: 'completed' };
+            if (i === currentStep) return { ...step, status: 'active' };
+            return { ...step, status: 'pending' };
+          })
+        );
       }
-    }, 700);
+    }, 1200);
+  };
+
+  const startDiscoveryFromIdea = async (idea: string, details?: string) => {
+    if (inFlightRequests.current.has('discover') || brandMemory.stageExecution?.discover?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Discovery generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('discover');
+
+    setStageStatus('discover', 'generating');
+    clearStageError('discover');
+    setGeneratingStage('discover');
+    setIsProcessing(true);
+    setProcessingSteps(DEFAULT_PROCESSING_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+    setCurrentProcessingStepIndex(0);
+
+    const stepInterval = startStepPacing(DEFAULT_PROCESSING_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -276,14 +321,18 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const discoveryData: DiscoveryData = result.data;
 
-      // Complete all steps
+      // Real completion is source of truth: complete steps and short transition polish
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(DEFAULT_PROCESSING_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -305,8 +354,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during discovery generation.';
       console.error('[Discovery Generation Error]:', err);
-      setStageError('discover', safeMessage);
+      setStageError('discover', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('discover');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
@@ -316,8 +367,20 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (!brandMemory.discovery?.coreProblem || !brandMemory.discovery?.primaryAudience) {
+      setStageError('position', 'Discovery data is missing or incomplete. Discovery must be completed before Positioning.');
+      return;
+    }
+
+    if (inFlightRequests.current.has('position') || brandMemory.stageExecution?.position?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Positioning generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('position');
+
     setStageStatus('position', 'generating');
     clearStageError('position');
+    setGeneratingStage('position');
     setIsProcessing(true);
 
     const POSITION_STEPS: ProcessingStep[] = [
@@ -328,23 +391,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       { id: '5', label: 'Locking recommended strategic position into Brand Memory', status: 'pending' },
     ];
 
-    setProcessingSteps(POSITION_STEPS);
+    setProcessingSteps(POSITION_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
     setCurrentProcessingStepIndex(0);
 
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < POSITION_STEPS.length - 1) {
-        currentStep++;
-        setCurrentProcessingStepIndex(currentStep);
-        setProcessingSteps(prev =>
-          prev.map((step, i) => {
-            if (i < currentStep) return { ...step, status: 'completed' };
-            if (i === currentStep) return { ...step, status: 'active' };
-            return { ...step, status: 'pending' };
-          })
-        );
-      }
-    }, 700);
+    const stepInterval = startStepPacing(POSITION_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -365,14 +415,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const positioningData: PositioningData = result.data;
 
-      // Complete all steps
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(POSITION_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -390,8 +443,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during positioning generation.';
       console.error('[Positioning Generation Error]:', err);
-      setStageError('position', safeMessage);
+      setStageError('position', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('position');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
@@ -401,8 +456,25 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (!brandMemory.discovery?.coreProblem || !brandMemory.discovery?.primaryAudience) {
+      setStageError('personality', 'Discovery data is missing or incomplete. Discovery and Positioning must be completed before Personality.');
+      return;
+    }
+
+    if (!brandMemory.positioning?.category || (!brandMemory.positioning?.positioningStatement && !brandMemory.positioning?.valueProposition)) {
+      setStageError('personality', 'Positioning data is missing or incomplete. Discovery and Positioning must be completed before Personality.');
+      return;
+    }
+
+    if (inFlightRequests.current.has('personality') || brandMemory.stageExecution?.personality?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Personality generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('personality');
+
     setStageStatus('personality', 'generating');
     clearStageError('personality');
+    setGeneratingStage('personality');
     setIsProcessing(true);
 
     const PERSONALITY_STEPS: ProcessingStep[] = [
@@ -413,23 +485,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       { id: '5', label: 'Generating calibration writing samples and locking Brand Memory', status: 'pending' },
     ];
 
-    setProcessingSteps(PERSONALITY_STEPS);
+    setProcessingSteps(PERSONALITY_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
     setCurrentProcessingStepIndex(0);
 
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < PERSONALITY_STEPS.length - 1) {
-        currentStep++;
-        setCurrentProcessingStepIndex(currentStep);
-        setProcessingSteps(prev =>
-          prev.map((step, i) => {
-            if (i < currentStep) return { ...step, status: 'completed' };
-            if (i === currentStep) return { ...step, status: 'active' };
-            return { ...step, status: 'pending' };
-          })
-        );
-      }
-    }, 700);
+    const stepInterval = startStepPacing(PERSONALITY_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -451,14 +510,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const personalityData: PersonalityData = result.data;
 
-      // Complete all steps
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(PERSONALITY_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -476,8 +538,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during personality generation.';
       console.error('[Personality Generation Error]:', err);
-      setStageError('personality', safeMessage);
+      setStageError('personality', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('personality');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
@@ -502,8 +566,15 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (inFlightRequests.current.has('naming') || brandMemory.stageExecution?.naming?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Naming generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('naming');
+
     setStageStatus('naming', 'generating');
     clearStageError('naming');
+    setGeneratingStage('naming');
     setIsProcessing(true);
 
     const NAMING_STEPS: ProcessingStep[] = [
@@ -514,23 +585,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       { id: '5', label: 'Executing 8-factor diagnostic evaluations & risk audits', status: 'pending' },
     ];
 
-    setProcessingSteps(NAMING_STEPS);
+    setProcessingSteps(NAMING_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
     setCurrentProcessingStepIndex(0);
 
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < NAMING_STEPS.length - 1) {
-        currentStep++;
-        setCurrentProcessingStepIndex(currentStep);
-        setProcessingSteps(prev =>
-          prev.map((step, i) => {
-            if (i < currentStep) return { ...step, status: 'completed' };
-            if (i === currentStep) return { ...step, status: 'active' };
-            return { ...step, status: 'pending' };
-          })
-        );
-      }
-    }, 700);
+    const stepInterval = startStepPacing(NAMING_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -553,14 +611,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const namingData: NamingData = result.data;
 
-      // Complete all steps
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(NAMING_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -579,8 +640,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during naming generation.';
       console.error('[Naming Generation Error]:', err);
-      setStageError('naming', safeMessage);
+      setStageError('naming', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('naming');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
@@ -605,13 +668,24 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    if (!brandMemory.naming || (!brandMemory.naming.namingStrategy && (!brandMemory.naming.namingWorlds || brandMemory.naming.namingWorlds.length === 0) && (!brandMemory.naming.candidates || brandMemory.naming.candidates.length === 0))) {
+    if (
+      brandMemory.stageExecution?.naming?.status !== 'ready' ||
+      !brandMemory.naming ||
+      (!brandMemory.naming.namingStrategy && (!brandMemory.naming.namingWorlds || brandMemory.naming.namingWorlds.length === 0) && (!brandMemory.naming.candidates || brandMemory.naming.candidates.length === 0))
+    ) {
       setStageError('visualize', 'Naming data is missing or incomplete. Discovery, Positioning, Personality, and Naming must be completed before Visual identity.');
       return;
     }
 
+    if (inFlightRequests.current.has('visualize') || brandMemory.stageExecution?.visualize?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Visualize generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('visualize');
+
     setStageStatus('visualize', 'generating');
     clearStageError('visualize');
+    setGeneratingStage('visualize');
     setIsProcessing(true);
 
     const VISUAL_STEPS: ProcessingStep[] = [
@@ -622,23 +696,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       { id: '5', label: 'Establishing Art Direction, Graphic Language & UI Principles', status: 'pending' },
     ];
 
-    setProcessingSteps(VISUAL_STEPS);
+    setProcessingSteps(VISUAL_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
     setCurrentProcessingStepIndex(0);
 
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < VISUAL_STEPS.length - 1) {
-        currentStep++;
-        setCurrentProcessingStepIndex(currentStep);
-        setProcessingSteps(prev =>
-          prev.map((step, i) => {
-            if (i < currentStep) return { ...step, status: 'completed' };
-            if (i === currentStep) return { ...step, status: 'active' };
-            return { ...step, status: 'pending' };
-          })
-        );
-      }
-    }, 700);
+    const stepInterval = startStepPacing(VISUAL_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -662,14 +723,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const visualData: VisualData = result.data;
 
-      // Complete all steps
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(VISUAL_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -687,8 +751,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during visual identity generation.';
       console.error('[Visual Identity Generation Error]:', err);
-      setStageError('visualize', safeMessage);
+      setStageError('visualize', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('visualize');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
@@ -723,8 +789,15 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (inFlightRequests.current.has('challenge') || brandMemory.stageExecution?.challenge?.status === 'generating') {
+      console.warn('[Single-Flight Guard] Challenge generation already in flight. Ignoring duplicate trigger.');
+      return;
+    }
+    inFlightRequests.current.add('challenge');
+
     setStageStatus('challenge', 'generating');
     clearStageError('challenge');
+    setGeneratingStage('challenge');
     setIsProcessing(true);
 
     const CHALLENGE_STEPS: ProcessingStep[] = [
@@ -735,23 +808,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       { id: '5', label: 'Synthesizing adversarial findings & strategic remediations', status: 'pending' },
     ];
 
-    setProcessingSteps(CHALLENGE_STEPS);
+    setProcessingSteps(CHALLENGE_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
     setCurrentProcessingStepIndex(0);
 
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      if (currentStep < CHALLENGE_STEPS.length - 1) {
-        currentStep++;
-        setCurrentProcessingStepIndex(currentStep);
-        setProcessingSteps(prev =>
-          prev.map((step, i) => {
-            if (i < currentStep) return { ...step, status: 'completed' };
-            if (i === currentStep) return { ...step, status: 'active' };
-            return { ...step, status: 'pending' };
-          })
-        );
-      }
-    }, 700);
+    const stepInterval = startStepPacing(CHALLENGE_STEPS);
 
     try {
       const response = await fetch('/api/generate-stage', {
@@ -776,13 +836,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || `Server responded with status ${response.status}`);
+        const error = new Error(result.error || `Server responded with status ${response.status}`);
+        (error as any).category = result.category || (response.status === 429 ? 'RATE_LIMIT' : 'UNKNOWN');
+        (error as any).retryAfter = result.retryAfter;
+        throw error;
       }
 
       const challengeData: ChallengeData = result.data;
 
       setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
-      await new Promise(r => setTimeout(r, 400));
+      setCurrentProcessingStepIndex(CHALLENGE_STEPS.length);
+      await new Promise(r => setTimeout(r, 200));
 
       const now = new Date().toISOString();
       setBrandMemory(prev => ({
@@ -800,13 +864,19 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(stepInterval);
       const safeMessage = err.message || 'An unexpected error occurred during brand challenge generation.';
       console.error('[Challenge Generation Error]:', err);
-      setStageError('challenge', safeMessage);
+      setStageError('challenge', safeMessage, (err as any).category, (err as any).retryAfter);
     } finally {
+      inFlightRequests.current.delete('challenge');
+      setGeneratingStage(null);
       setIsProcessing(false);
     }
   };
 
   const goToStage = (stage: StageId) => {
+    if (!canAccessStage(stage, brandMemory)) {
+      console.warn(`[Navigation Guard] Stage "${stage}" is locked because upstream stages are incomplete or in error.`);
+      return;
+    }
     setCurrentStage(stage);
     if (stage === 'brand-kit') {
       setActiveView('brand-kit');
@@ -816,52 +886,47 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const advanceToNextStage = () => {
+    const isCurrentReady = brandMemory.id === 'demo-hackathon-teammates' || 
+      brandMemory.stageExecution?.[currentStage]?.status === 'ready';
+
+    if (!isCurrentReady) {
+      console.warn(`[Gating Guard] Cannot advance: stage "${currentStage}" is not ready (status: ${brandMemory.stageExecution?.[currentStage]?.status}).`);
+      return;
+    }
+
     const currentIndex = STAGE_ORDER.indexOf(currentStage);
     if (currentIndex >= 0 && currentIndex < STAGE_ORDER.length - 1) {
       const nextStage = STAGE_ORDER[currentIndex + 1];
+
+      if (!canAccessStage(nextStage, brandMemory)) {
+        console.warn(`[Gating Guard] Cannot advance to "${nextStage}": stage is locked.`);
+        return;
+      }
+
       const now = new Date().toISOString();
-      
-      // Update stagesCompleted and stageExecution
-      setBrandMemory(prev => {
-        const stageExec = { ...(prev.stageExecution || createInitialStageExecution()) };
-        stageExec[currentStage] = {
-          ...(stageExec[currentStage] || {}),
-          status: 'ready',
-          lastUpdated: now,
-        };
-        return {
-          ...prev,
-          updatedAt: now,
-          currentStage: nextStage,
-          stagesCompleted: Array.from(new Set([...prev.stagesCompleted, currentStage])),
-          stageExecution: stageExec,
-        };
-      });
+      setBrandMemory(prev => ({
+        ...prev,
+        updatedAt: now,
+        currentStage: nextStage,
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, currentStage])),
+      }));
 
       goToStage(nextStage);
 
-      // Trigger positioning generation if transitioning to position and not yet ready
-      if (nextStage === 'position' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.position?.status !== 'ready') {
+      // Trigger stage generation if transitioning to nextStage and idle
+      if (nextStage === 'position' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.position?.status === 'idle') {
         generatePositioning();
       }
-
-      // Trigger personality generation if transitioning to personality and not yet ready
-      if (nextStage === 'personality' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.personality?.status !== 'ready') {
+      if (nextStage === 'personality' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.personality?.status === 'idle') {
         generatePersonality();
       }
-
-      // Trigger naming generation if transitioning to naming and not yet ready
-      if (nextStage === 'naming' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.naming?.status !== 'ready') {
+      if (nextStage === 'naming' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.naming?.status === 'idle') {
         generateNaming();
       }
-
-      // Trigger visualize generation if transitioning to visualize and not yet ready
-      if (nextStage === 'visualize' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.visualize?.status !== 'ready') {
+      if (nextStage === 'visualize' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.visualize?.status === 'idle') {
         generateVisualize();
       }
-
-      // Trigger challenge generation if transitioning to challenge and not yet ready
-      if (nextStage === 'challenge' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.challenge?.status !== 'ready') {
+      if (nextStage === 'challenge' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.challenge?.status === 'idle') {
         generateChallenge();
       }
     }
@@ -1222,13 +1287,15 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
-  const setStageError = (stage: StageId, error: string) => {
+  const setStageError = (stage: StageId, error: string, category?: ErrorCategory, retryAfter?: number) => {
     setBrandMemory(prev => {
       const stageExec = { ...(prev.stageExecution || createInitialStageExecution()) };
       stageExec[stage] = {
         ...(stageExec[stage] || {}),
         status: 'error',
         lastError: error,
+        errorCategory: category,
+        retryAfter: retryAfter,
         lastUpdated: new Date().toISOString(),
       };
       return {
@@ -1246,6 +1313,8 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         stageExec[stage] = {
           ...stageExec[stage],
           lastError: undefined,
+          errorCategory: undefined,
+          retryAfter: undefined,
           lastUpdated: new Date().toISOString(),
         };
       }
@@ -1265,8 +1334,10 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         currentStage,
         isMemoryOpen,
         isProcessing,
+        generatingStage,
         processingSteps,
         currentProcessingStepIndex,
+        canAccessStage: (stage: StageId) => canAccessStage(stage, brandMemory),
         setActiveView,
         setCurrentStage,
         setIsMemoryOpen,

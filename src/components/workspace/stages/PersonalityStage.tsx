@@ -14,7 +14,8 @@ import {
   Sliders,
   Quote,
   MessageSquare,
-  FileText
+  FileText,
+  Lock
 } from 'lucide-react';
 import { EditFieldModal } from '../../shared/EditFieldModal';
 
@@ -24,7 +25,8 @@ export const PersonalityStage: React.FC = () => {
     updatePersonality, 
     advanceToNextStage,
     generatePersonality,
-    goToStage 
+    goToStage,
+    isProcessing
   } = useBrand();
 
   const { personality } = brandMemory;
@@ -84,17 +86,29 @@ export const PersonalityStage: React.FC = () => {
           <div className="flex items-center gap-3">
             <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
             <div className="space-y-0.5">
-              <span className="font-semibold text-xs block text-rose-300">Personality Generation Failed</span>
+              <span className="font-semibold text-xs block text-rose-300">
+                {stageStatus.errorCategory === 'QUOTA'
+                  ? 'Groq AI Quota Exhausted'
+                  : stageStatus.errorCategory === 'RATE_LIMIT'
+                  ? 'Groq Rate Limit Exceeded'
+                  : 'Personality Generation Failed'}
+              </span>
               <span className="text-xs text-rose-200/90">
                 {stageStatus.lastError || 'Unable to generate strategic personality. Please try again.'}
               </span>
+              {stageStatus.errorCategory === 'QUOTA' && (
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  AI provider credits or quota limit reached on Groq account.
+                </span>
+              )}
             </div>
           </div>
           <button
             onClick={() => generatePersonality()}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0"
+            disabled={isProcessing}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
             <span>Retry Personality</span>
           </button>
         </div>
@@ -389,25 +403,77 @@ export const PersonalityStage: React.FC = () => {
       )}
 
       {/* Action Advance Bar */}
-      <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span>Personality Constellation locked</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          </div>
-          <p className="text-xs text-[#8a8175]">
-            Next, we explore 3 distinct Naming Worlds derived from this exact persona.
-          </p>
-        </div>
+      {(() => {
+        const isReady = stageStatus?.status === 'ready';
+        const isGenerating = stageStatus?.status === 'generating';
+        const isError = stageStatus?.status === 'error';
+        const hasValidPersonality = !!personality.traits && personality.traits.length > 0 && isReady;
+        const canAdvance = isReady && hasValidPersonality;
 
-        <button
-          onClick={advanceToNextStage}
-          className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95"
-        >
-          <span>Explore Naming Worlds</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+        return (
+          <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            {canAdvance ? (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <span>Personality Constellation locked</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    Next, we explore 3 distinct Naming Worlds derived from this exact persona.
+                  </p>
+                </div>
+
+                <button
+                  onClick={advanceToNextStage}
+                  className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <span>Explore Naming Worlds</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#a0988e]">
+                    <span>{isError ? 'Personality Generation Incomplete' : isGenerating ? 'Forming Archetype & Voice...' : 'Personality Required'}</span>
+                    <span className={`w-2 h-2 rounded-full ${isError ? 'bg-rose-500' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-[#7d7468]'}`} />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    {isError 
+                      ? 'Resolve personality generation errors before advancing to Naming.'
+                      : isGenerating 
+                      ? 'Groq is crystallizing the archetype, traits, and behavioral voice rules...'
+                      : 'Lock in personality and brand archetype before advancing to Naming.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {isError && (
+                    <button
+                      onClick={() => generatePersonality()}
+                      disabled={isGenerating}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 font-semibold text-xs rounded-full transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                      <span>Retry Personality</span>
+                    </button>
+                  )}
+                  <button
+                    disabled={true}
+                    title="Complete personality stage before proceeding to Naming"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-white/5 text-[#7d7468] font-semibold text-xs rounded-full cursor-not-allowed border border-white/5 opacity-50"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Explore Naming Worlds (Locked)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
 
       {/* Edit Tone Modal */}
       {isToneModalOpen && personality.voiceAndTone && (

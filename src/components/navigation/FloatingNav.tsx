@@ -1,7 +1,7 @@
 import React from 'react';
-import { useBrand } from '../../context/BrandContext';
+import { useBrand, canAccessStage } from '../../context/BrandContext';
 import { StageId } from '../../types/brand';
-import { Sparkles, Plus, Database, ChevronRight, Layers, ArrowLeft } from 'lucide-react';
+import { Sparkles, Plus, Database, ChevronRight, Layers, ArrowLeft, Lock } from 'lucide-react';
 
 interface StageMeta {
   id: StageId;
@@ -67,24 +67,29 @@ export const FloatingNav: React.FC = () => {
             {STAGES.map((s) => {
               const isActive = currentStage === s.id;
               const isCompleted = brandMemory.stagesCompleted.includes(s.id);
+              const isAccessible = canAccessStage(s.id, brandMemory);
 
               return (
                 <button
                   key={s.id}
-                  onClick={() => goToStage(s.id)}
+                  onClick={() => isAccessible && goToStage(s.id)}
+                  disabled={!isAccessible}
                   className={`px-2.5 py-1 rounded-full text-xs font-mono transition-all flex items-center gap-1.5 ${
                     isActive
                       ? 'bg-white/15 text-white font-medium shadow-xs border border-white/20'
+                      : !isAccessible
+                      ? 'text-[#555047] opacity-40 cursor-not-allowed'
                       : isCompleted
                       ? 'text-[#c6bdb0] hover:text-white hover:bg-white/5'
                       : 'text-[#847b70] hover:text-[#bbb1a4]'
                   }`}
-                  title={s.label}
+                  title={!isAccessible ? `Stage locked: complete upstream stages first` : s.label}
                 >
                   <span className={`text-[10px] ${isActive ? 'text-amber-300' : 'opacity-60'}`}>
                     {s.index}
                   </span>
                   <span>{s.label}</span>
+                  {!isAccessible && <Lock className="w-2.5 h-2.5 opacity-60 ml-0.5" />}
                 </button>
               );
             })}

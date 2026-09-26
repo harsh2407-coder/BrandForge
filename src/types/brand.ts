@@ -12,9 +12,19 @@ export type StageId =
 // Execution status for each stage
 export type StageExecutionStatus = 'idle' | 'generating' | 'ready' | 'error';
 
+export type ErrorCategory = 
+  | 'RATE_LIMIT' 
+  | 'QUOTA' 
+  | 'PROVIDER_ERROR' 
+  | 'VALIDATION_ERROR' 
+  | 'NETWORK_ERROR' 
+  | 'UNKNOWN';
+
 export interface StageStatus {
   status: StageExecutionStatus;
   lastError?: string;
+  errorCategory?: ErrorCategory;
+  retryAfter?: number;
   lastUpdated?: string;
 }
 

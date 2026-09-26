@@ -20,7 +20,8 @@ import {
   XCircle, 
   Target, 
   PenTool,
-  MoveUpRight
+  MoveUpRight,
+  Lock
 } from 'lucide-react';
 
 export const VisualStage: React.FC = () => {
@@ -29,14 +30,16 @@ export const VisualStage: React.FC = () => {
     updateVisual, 
     advanceToNextStage,
     generateVisualize,
-    goToStage 
+    goToStage,
+    isProcessing 
   } = useBrand();
 
   const { visual, naming, personality } = brandMemory;
   const stageStatus = brandMemory.stageExecution?.visualize;
-  const brandName = naming.selectedName?.name || 'ScholarCompass';
+  const brandName = naming.selectedName?.name || brandMemory.projectName || 'Brand';
+  const namingReady = brandMemory.stageExecution?.naming?.status === 'ready';
 
-  // Auto-trigger generation for real brands if upstream completed but visual idle
+  // Auto-trigger generation for real brands if upstream completed (including naming) but visual idle
   useEffect(() => {
     if (
       brandMemory.id !== 'demo-hackathon-teammates' &&
@@ -44,7 +47,7 @@ export const VisualStage: React.FC = () => {
       brandMemory.positioning?.category &&
       brandMemory.personality?.traits &&
       brandMemory.personality.traits.length > 0 &&
-      brandMemory.naming?.namingStrategy &&
+      namingReady &&
       brandMemory.stageExecution?.visualize?.status === 'idle' &&
       (!visual.creativeDirection && (!visual.palette || visual.palette.length === 0))
     ) {
@@ -55,7 +58,7 @@ export const VisualStage: React.FC = () => {
     brandMemory.discovery?.coreProblem,
     brandMemory.positioning?.category,
     brandMemory.personality?.traits,
-    brandMemory.naming?.namingStrategy,
+    namingReady,
     brandMemory.stageExecution?.visualize?.status,
     visual.creativeDirection,
     visual.palette,
@@ -125,17 +128,29 @@ export const VisualStage: React.FC = () => {
           <div className="flex items-center gap-3">
             <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
             <div className="space-y-0.5">
-              <span className="font-semibold text-xs block text-rose-300">Visual Identity Generation Failed</span>
+              <span className="font-semibold text-xs block text-rose-300">
+                {stageStatus.errorCategory === 'QUOTA'
+                  ? 'Groq AI Quota Exhausted'
+                  : stageStatus.errorCategory === 'RATE_LIMIT'
+                  ? 'Groq Rate Limit Exceeded'
+                  : 'Visual Identity Generation Failed'}
+              </span>
               <span className="text-xs text-rose-200/90">
                 {stageStatus.lastError || 'Unable to generate visual identity direction. Please try again.'}
               </span>
+              {stageStatus.errorCategory === 'QUOTA' && (
+                <span className="text-[11px] text-rose-300/80 block mt-1">
+                  AI provider credits or quota limit reached on Groq account.
+                </span>
+              )}
             </div>
           </div>
           <button
             onClick={() => generateVisualize()}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 cursor-pointer"
+            disabled={isProcessing}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 text-xs font-medium transition-colors shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
             <span>Retry Visual Identity</span>
           </button>
         </div>
@@ -695,25 +710,76 @@ export const VisualStage: React.FC = () => {
       )}
 
       {/* Action Advance Bar */}
-      <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span>Visual identity system locked in Brand Memory</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          </div>
-          <p className="text-xs text-[#8a8175]">
-            Next, we challenge the entire brand against the AI Critic to break contradictions.
-          </p>
-        </div>
+      {(() => {
+        const isReady = stageStatus?.status === 'ready';
+        const isGenerating = stageStatus?.status === 'generating';
+        const isError = stageStatus?.status === 'error';
+        const hasValidVisual = (!!visual.creativeDirection || (!!visual.palette && visual.palette.length > 0)) && isReady;
+        const canAdvance = isReady && hasValidVisual;
 
-        <button
-          onClick={advanceToNextStage}
-          className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer"
-        >
-          <span>Challenge the brand</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
+        return (
+          <div className="p-6 rounded-3xl spatial-surface border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6">
+            {canAdvance ? (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <span>Visual identity system locked in Brand Memory</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    Next, we challenge the entire brand against the AI Critic to break contradictions.
+                  </p>
+                </div>
+
+                <button
+                  onClick={advanceToNextStage}
+                  className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#f4efe8] hover:bg-white text-[#11100f] font-semibold text-xs rounded-full transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <span>Challenge the brand</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#a0988e]">
+                    <span>{isError ? 'Visual Generation Incomplete' : isGenerating ? 'Sculpting Visual Identity...' : 'Visual Identity Required'}</span>
+                    <span className={`w-2 h-2 rounded-full ${isError ? 'bg-rose-500' : isGenerating ? 'bg-amber-400 animate-pulse' : 'bg-[#7d7468]'}`} />
+                  </div>
+                  <p className="text-xs text-[#8a8175]">
+                    {isError 
+                      ? 'Resolve visual generation errors to unlock the Challenge engine.'
+                      : isGenerating 
+                      ? 'Groq is sculpting the color palette, typography and form language...'
+                      : 'Generate visual identity system before challenging the brand.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {isError && (
+                    <button
+                      onClick={() => generateVisualize()}
+                      disabled={isGenerating}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 font-semibold text-xs rounded-full transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                      <span>Retry Visual Identity</span>
+                    </button>
+                  )}
+                  <button
+                    disabled={true}
+                    title="Complete visual stage before proceeding to Challenge"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-white/5 text-[#7d7468] font-semibold text-xs rounded-full cursor-not-allowed border border-white/5 opacity-50"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Challenge the brand (Locked)</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 };
