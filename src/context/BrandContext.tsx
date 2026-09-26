@@ -2,6 +2,21 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { BrandMemory, StageId, ProcessingStep, DiscoveryData, PositioningData, PersonalityData, NamingData, VisualData, ChallengeData, ChallengeFinding, ProposedChange, ALLOWED_CHALLENGE_MUTATION_FIELDS, LaunchData, StageExecutionStatus, StageStatus, NameCandidate, ErrorCategory } from '../types/brand';
 import { DEMO_BRAND } from '../data/demoBrand';
 import { brandEngine } from '../services/brandService';
+import { assembleDeliverData } from '../utils/deliverAssembly';
+import {
+  SHOWCASE_PROMPT,
+  isShowcasePrompt,
+  SHOWCASE_DELAYS,
+  getShowcaseDiscovery,
+  getShowcasePositioning,
+  getShowcasePersonality,
+  getShowcaseNaming,
+  getShowcaseVisual,
+  getShowcaseInitialChallenge,
+  getShowcaseReChallenge,
+} from '../utils/showcase';
+
+export type ExecutionMode = 'live' | 'showcase';
 
 export const STAGE_ORDER: StageId[] = [
   'input',
@@ -39,6 +54,7 @@ interface BrandContextType {
   brandMemory: BrandMemory;
   activeView: 'landing' | 'workspace' | 'brand-kit';
   currentStage: StageId;
+  executionMode: ExecutionMode;
   isMemoryOpen: boolean;
   isProcessing: boolean;
   generatingStage: StageId | null;
@@ -56,6 +72,7 @@ interface BrandContextType {
   generateNaming: () => Promise<void>;
   generateVisualize: () => Promise<void>;
   generateChallenge: () => Promise<void>;
+  runDeterministicShowcase: (autoAdvance?: boolean) => Promise<void>;
   advanceToNextStage: () => void;
   goToStage: (stage: StageId) => void;
   updateDiscovery: (data: Partial<DiscoveryData>) => void;
@@ -225,6 +242,7 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [activeView, setActiveView] = useState<'landing' | 'workspace' | 'brand-kit'>('landing');
   const [currentStage, setCurrentStage] = useState<StageId>('input');
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('live');
   const [isMemoryOpen, setIsMemoryOpen] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [generatingStage, setGeneratingStage] = useState<StageId | null>(null);
@@ -255,12 +273,13 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const startNewProject = () => {
+    setExecutionMode('live');
     setBrandMemory(createBlankBrandMemory());
     setCurrentStage('input');
     setActiveView('workspace');
   };
 
-  const startStepPacing = (steps: ProcessingStep[]) => {
+  const startStepPacing = (steps: ProcessingStep[], intervalMs = 1200) => {
     let currentStep = 0;
     return setInterval(() => {
       if (currentStep < steps.length - 2) {
@@ -284,10 +303,58 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           })
         );
       }
-    }, 1200);
+    }, intervalMs);
   };
 
   const startDiscoveryFromIdea = async (idea: string, details?: string) => {
+    if (isShowcasePrompt(idea)) {
+      setExecutionMode('showcase');
+      const cleanMemory = createBlankBrandMemory();
+      cleanMemory.roughIdea = idea;
+      cleanMemory.knownDetails = details || '';
+      cleanMemory.projectName = 'SprintForge';
+      cleanMemory.stageExecution = createInitialStageExecution();
+      cleanMemory.stageExecution.discover = { status: 'generating', lastUpdated: new Date().toISOString() };
+      setBrandMemory(cleanMemory);
+
+      setGeneratingStage('discover');
+      setIsProcessing(true);
+      setProcessingSteps(DEFAULT_PROCESSING_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.discover / DEFAULT_PROCESSING_STEPS.length));
+      const stepInterval = startStepPacing(DEFAULT_PROCESSING_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.discover));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(DEFAULT_PROCESSING_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const discoveryData = getShowcaseDiscovery();
+      setBrandMemory(prev => ({
+        ...prev,
+        roughIdea: idea,
+        knownDetails: details || '',
+        projectName: 'SprintForge',
+        discovery: discoveryData,
+        updatedAt: now,
+        currentStage: 'discover',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'input', 'discover'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          discover: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('discover');
+      setActiveView('workspace');
+      setGeneratingStage(null);
+      setIsProcessing(false);
+      return;
+    }
+
     if (inFlightRequests.current.has('discover') || brandMemory.stageExecution?.discover?.status === 'generating') {
       console.warn('[Single-Flight Guard] Discovery generation already in flight. Ignoring duplicate trigger.');
       return;
@@ -364,6 +431,53 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const generatePositioning = async () => {
     if (brandMemory.id === 'demo-hackathon-teammates') {
+      return;
+    }
+
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('position', 'generating');
+      clearStageError('position');
+      setGeneratingStage('position');
+      setIsProcessing(true);
+
+      const POSITION_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Extracting strategic tensions & beachhead signals from Discovery', status: 'pending' },
+        { id: '2', label: 'Exploring unoccupied strategic territory wedges', status: 'pending' },
+        { id: '3', label: 'Plotting 2D strategic coordinate map & trade-offs', status: 'pending' },
+        { id: '4', label: 'Synthesizing defensible positioning statement & differentiation', status: 'pending' },
+        { id: '5', label: 'Locking recommended strategic position into Brand Memory', status: 'pending' },
+      ];
+
+      setProcessingSteps(POSITION_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.position / POSITION_STEPS.length));
+      const stepInterval = startStepPacing(POSITION_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.position));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(POSITION_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const positioningData = getShowcasePositioning(true);
+      setBrandMemory(prev => ({
+        ...prev,
+        positioning: positioningData,
+        updatedAt: now,
+        currentStage: 'position',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'position'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          position: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('position');
+      setGeneratingStage(null);
+      setIsProcessing(false);
       return;
     }
 
@@ -453,6 +567,53 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const generatePersonality = async () => {
     if (brandMemory.id === 'demo-hackathon-teammates') {
+      return;
+    }
+
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('personality', 'generating');
+      clearStageError('personality');
+      setGeneratingStage('personality');
+      setIsProcessing(true);
+
+      const PERSONALITY_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Extracting behavioral tensions & trust model from Discovery + Positioning', status: 'pending' },
+        { id: '2', label: 'Formulating core personality traits and quarantined anti-archetypes', status: 'pending' },
+        { id: '3', label: 'Synthesizing non-negotiable brand principles and spectrum dimensions', status: 'pending' },
+        { id: '4', label: 'Architecting operational brand voice and actionable tone rules', status: 'pending' },
+        { id: '5', label: 'Generating calibration writing samples and locking Brand Memory', status: 'pending' },
+      ];
+
+      setProcessingSteps(PERSONALITY_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.personality / PERSONALITY_STEPS.length));
+      const stepInterval = startStepPacing(PERSONALITY_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.personality));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(PERSONALITY_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const personalityData = getShowcasePersonality();
+      setBrandMemory(prev => ({
+        ...prev,
+        personality: personalityData,
+        updatedAt: now,
+        currentStage: 'personality',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'personality'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          personality: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('personality');
+      setGeneratingStage(null);
+      setIsProcessing(false);
       return;
     }
 
@@ -548,6 +709,54 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const generateNaming = async () => {
     if (brandMemory.id === 'demo-hackathon-teammates') {
+      return;
+    }
+
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('naming', 'generating');
+      clearStageError('naming');
+      setGeneratingStage('naming');
+      setIsProcessing(true);
+
+      const NAMING_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Analyzing Discovery tensions, Positioning wedge & Voice posture', status: 'pending' },
+        { id: '2', label: 'Synthesizing strategic Naming Strategy & Creative Brief', status: 'pending' },
+        { id: '3', label: 'Formulating 3 to 5 distinct Naming Worlds & emotional territories', status: 'pending' },
+        { id: '4', label: 'Generating 12 to 20 candidate wordmarks across linguistic archetypes', status: 'pending' },
+        { id: '5', label: 'Executing 8-factor diagnostic evaluations & risk audits', status: 'pending' },
+      ];
+
+      setProcessingSteps(NAMING_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.naming / NAMING_STEPS.length));
+      const stepInterval = startStepPacing(NAMING_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.naming));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(NAMING_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const namingData = getShowcaseNaming();
+      setBrandMemory(prev => ({
+        ...prev,
+        projectName: namingData.selectedName?.name || prev.projectName || 'SprintForge',
+        naming: namingData,
+        updatedAt: now,
+        currentStage: 'naming',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'naming'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          naming: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('naming');
+      setGeneratingStage(null);
+      setIsProcessing(false);
       return;
     }
 
@@ -650,6 +859,53 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const generateVisualize = async () => {
     if (brandMemory.id === 'demo-hackathon-teammates') {
+      return;
+    }
+
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('visualize', 'generating');
+      clearStageError('visualize');
+      setGeneratingStage('visualize');
+      setIsProcessing(true);
+
+      const VISUAL_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Analyzing Discovery friction, Positioning wedge, and Verbal identity', status: 'pending' },
+        { id: '2', label: 'Sculpting Creative Concept & Visual Thesis mental model', status: 'pending' },
+        { id: '3', label: 'Formulating 4 to 6 strategic Visual Principles', status: 'pending' },
+        { id: '4', label: 'Synthesizing 7-role Color System & Typography pairings', status: 'pending' },
+        { id: '5', label: 'Establishing Art Direction, Graphic Language & UI Principles', status: 'pending' },
+      ];
+
+      setProcessingSteps(VISUAL_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.visualize / VISUAL_STEPS.length));
+      const stepInterval = startStepPacing(VISUAL_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.visualize));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(VISUAL_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const visualData = getShowcaseVisual();
+      setBrandMemory(prev => ({
+        ...prev,
+        visual: visualData,
+        updatedAt: now,
+        currentStage: 'visualize',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'visualize'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          visualize: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('visualize');
+      setGeneratingStage(null);
+      setIsProcessing(false);
       return;
     }
 
@@ -764,6 +1020,53 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('challenge', 'generating');
+      clearStageError('challenge');
+      setGeneratingStage('challenge');
+      setIsProcessing(true);
+
+      const CHALLENGE_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Stress-testing Discovery assumptions & audience definition', status: 'pending' },
+        { id: '2', label: 'Interrogating Positioning defensibility & competitive wedge', status: 'pending' },
+        { id: '3', label: 'Auditing unearned claims, accuracy guarantees & credibility risks', status: 'pending' },
+        { id: '4', label: 'Analyzing Naming connotations & Visual language harmony', status: 'pending' },
+        { id: '5', label: 'Synthesizing adversarial findings & strategic remediations', status: 'pending' },
+      ];
+
+      setProcessingSteps(CHALLENGE_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.challenge / CHALLENGE_STEPS.length));
+      const stepInterval = startStepPacing(CHALLENGE_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.challenge));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(CHALLENGE_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      const challengeData = getShowcaseInitialChallenge();
+      setBrandMemory(prev => ({
+        ...prev,
+        challenge: challengeData,
+        updatedAt: now,
+        currentStage: 'challenge',
+        stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'challenge'])),
+        stageExecution: {
+          ...(prev.stageExecution || createInitialStageExecution()),
+          challenge: { status: 'ready', lastUpdated: now },
+        },
+      }));
+
+      setCurrentStage('challenge');
+      setGeneratingStage(null);
+      setIsProcessing(false);
+      return;
+    }
+
     if (!brandMemory.discovery?.coreProblem || !brandMemory.discovery?.primaryAudience) {
       setStageError('challenge', 'Discovery data is missing or incomplete. Challenge requires Discovery, Positioning, Personality, Naming, and Visualize stages.');
       return;
@@ -872,6 +1175,17 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const runDeterministicShowcase = async (autoAdvance: boolean = false) => {
+    await startDiscoveryFromIdea(SHOWCASE_PROMPT);
+    if (autoAdvance) {
+      await generatePositioning();
+      await generatePersonality();
+      await generateNaming();
+      await generateVisualize();
+      await generateChallenge();
+    }
+  };
+
   const goToStage = (stage: StageId) => {
     if (!canAccessStage(stage, brandMemory)) {
       console.warn(`[Navigation Guard] Stage "${stage}" is locked because upstream stages are incomplete or in error.`);
@@ -885,7 +1199,7 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const advanceToNextStage = () => {
+  const advanceToNextStage = async () => {
     const isCurrentReady = brandMemory.id === 'demo-hackathon-teammates' || 
       brandMemory.stageExecution?.[currentStage]?.status === 'ready';
 
@@ -928,6 +1242,25 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       if (nextStage === 'challenge' && brandMemory.id !== 'demo-hackathon-teammates' && brandMemory.stageExecution?.challenge?.status === 'idle') {
         generateChallenge();
+      }
+      if (nextStage === 'launch') {
+        if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+          setExecutionMode('showcase');
+          setIsProcessing(true);
+          setGeneratingStage('launch');
+          await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.deliver));
+          setIsProcessing(false);
+          setGeneratingStage(null);
+        }
+        setBrandMemory(prev => ({
+          ...prev,
+          launch: prev.launch?.headline ? prev.launch : DEMO_BRAND.launch,
+          stagesCompleted: Array.from(new Set([...prev.stagesCompleted, 'challenge', 'launch'])),
+          stageExecution: {
+            ...(prev.stageExecution || createInitialStageExecution()),
+            launch: { status: 'ready', lastUpdated: new Date().toISOString() },
+          },
+        }));
       }
     }
   };
@@ -1253,6 +1586,52 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsProcessing(false);
       return;
     }
+
+    if (executionMode === 'showcase' || isShowcasePrompt(brandMemory.roughIdea)) {
+      setExecutionMode('showcase');
+      setStageStatus('challenge', 'generating');
+      clearStageError('challenge');
+      setGeneratingStage('challenge');
+      setIsProcessing(true);
+
+      const RE_CHALLENGE_STEPS: ProcessingStep[] = [
+        { id: '1', label: 'Re-evaluating updated Brand Memory against strategic criteria', status: 'pending' },
+        { id: '2', label: 'Verifying remediation of accepted challenge findings', status: 'pending' },
+        { id: '3', label: 'Checking cross-stage coherence and brand alignment', status: 'pending' },
+        { id: '4', label: 'Synthesizing updated strategic resilience score', status: 'pending' },
+      ];
+
+      setProcessingSteps(RE_CHALLENGE_STEPS.map((s, idx) => ({ ...s, status: idx === 0 ? 'active' : 'pending' })));
+      setCurrentProcessingStepIndex(0);
+
+      const paceMs = Math.max(150, Math.floor(SHOWCASE_DELAYS.reChallenge / RE_CHALLENGE_STEPS.length));
+      const stepInterval = startStepPacing(RE_CHALLENGE_STEPS, paceMs);
+      await new Promise(r => setTimeout(r, SHOWCASE_DELAYS.reChallenge));
+      clearInterval(stepInterval);
+
+      setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setCurrentProcessingStepIndex(RE_CHALLENGE_STEPS.length);
+      await new Promise(r => setTimeout(r, 150));
+
+      const now = new Date().toISOString();
+      setBrandMemory(prev => {
+        const reChallengeData = getShowcaseReChallenge(prev.challenge);
+        return {
+          ...prev,
+          challenge: reChallengeData,
+          updatedAt: now,
+          stageExecution: {
+            ...(prev.stageExecution || createInitialStageExecution()),
+            challenge: { status: 'ready', lastUpdated: now },
+          },
+        };
+      });
+
+      setGeneratingStage(null);
+      setIsProcessing(false);
+      return;
+    }
+
     await generateChallenge();
   };
 
@@ -1332,6 +1711,7 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         brandMemory,
         activeView,
         currentStage,
+        executionMode,
         isMemoryOpen,
         isProcessing,
         generatingStage,
@@ -1349,6 +1729,7 @@ export const BrandProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         generateNaming,
         generateVisualize,
         generateChallenge,
+        runDeterministicShowcase,
         advanceToNextStage,
         goToStage,
         updateDiscovery,
