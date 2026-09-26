@@ -181,14 +181,34 @@ export function classifyGroqError(err: any): StageGenerationError {
     );
   }
 
-  // 2. Quota Exhaustion
+  // 2. Rate Limit (TPM / RPM / TPD / Rate Limit Exceeded)
+  if (
+    lowerMsg.includes('rate_limit_exceeded') ||
+    lowerMsg.includes('rate limit reached') ||
+    lowerMsg.includes('tokens per day') ||
+    lowerMsg.includes('tokens per minute') ||
+    lowerMsg.includes('requests per minute') ||
+    lowerMsg.includes('tpm') ||
+    lowerMsg.includes('rpm') ||
+    lowerMsg.includes('tpd') ||
+    lowerMsg.includes('too many requests') ||
+    (lowerMsg.includes('request too large') && lowerMsg.includes('tokens'))
+  ) {
+    const waitMsg = retryAfter ? ` Please wait ${retryAfter}s before retrying.` : ' Please wait a moment before trying again.';
+    return new StageGenerationError(
+      `Groq rate limit reached (requests or tokens limit).${waitMsg}`,
+      'RATE_LIMIT',
+      429,
+      retryAfter
+    );
+  }
+
+  // 3. Quota Exhaustion
   if (
     status === 402 ||
     (status === 429 && (
-      lowerMsg.includes('quota') || 
       lowerMsg.includes('insufficient_quota') || 
       lowerMsg.includes('credit') || 
-      lowerMsg.includes('billing') ||
       lowerMsg.includes('hard limit')
     )) ||
     lowerMsg.includes('exceeded your current quota')
@@ -196,27 +216,6 @@ export function classifyGroqError(err: any): StageGenerationError {
     return new StageGenerationError(
       'Groq AI organization quota or credit limit exhausted. Please check your Groq billing tier or credit balance.',
       'QUOTA',
-      429,
-      retryAfter
-    );
-  }
-
-  // 3. Rate Limit (TPM / RPM / Rate Limit Exceeded)
-  if (
-    status === 429 ||
-    lowerMsg.includes('rate limit') ||
-    lowerMsg.includes('rate_limit_exceeded') ||
-    lowerMsg.includes('tokens per minute') ||
-    lowerMsg.includes('requests per minute') ||
-    lowerMsg.includes('tpm') ||
-    lowerMsg.includes('rpm') ||
-    lowerMsg.includes('too many requests') ||
-    (lowerMsg.includes('request too large') && lowerMsg.includes('tokens'))
-  ) {
-    const waitMsg = retryAfter ? ` Please wait ${retryAfter}s before retrying.` : ' Please wait a moment before trying again.';
-    return new StageGenerationError(
-      `Groq rate limit reached (requests or tokens per minute).${waitMsg}`,
-      'RATE_LIMIT',
       429,
       retryAfter
     );
@@ -271,7 +270,7 @@ export function classifyGroqError(err: any): StageGenerationError {
 export const STAGE_COMPLETION_BUDGETS = {
   discovery: 3000,
   positioning: 4000,
-  personality: 4500,
+  personality: 4800,
   naming: 4500,
   visualize: 4500,
   challenge: 4500,
@@ -688,18 +687,25 @@ export class GroqGateway {
       throw new Error('Invalid Personality data: expected an object.');
     }
 
-    // 1. Traits
+    // 1. Traits Validation (must be at least 3 distinct traits)
     const rawTraits = Array.isArray(parsed.traits) ? parsed.traits : [];
-    if (rawTraits.length === 0) {
-      throw new Error('Invalid Personality data: traits array is missing or empty.');
+    if (rawTraits.length < 3) {
+      throw new Error(`Invalid Personality data: traits array is missing or empty (expected at least 3 traits, got ${rawTraits.length}).`);
     }
 
     const traits: PersonalityTrait[] = rawTraits.map((t: any, idx: number) => {
-      const name = String(t?.name || `Trait ${idx + 1}`).trim();
-      const description = String(t?.description || 'Authentic operational behavioral standard.').trim();
-      const strategicReason = String(t?.strategicReason || 'Directly reinforces positioning defensibility.').trim();
-      const whyItFits = String(t?.whyItFits || strategicReason).trim();
-      const evidence = String(t?.evidence || 'Derived from target user high-friction context.').trim();
+      const name = String(t?.name || '').trim();
+      const description = String(t?.description || '').trim();
+      const whyItFits = String(t?.whyItFits || t?.strategicReason || '').trim();
+      const strategicReason = String(t?.strategicReason || whyItFits).trim();
+      const evidence = String(t?.evidence || '').trim();
+
+      if (!name) {
+        throw new Error(`Invalid Personality data: trait at index ${idx} is missing a name.`);
+      }
+      if (!description || !whyItFits || !evidence) {
+        throw new Error(`Invalid Personality data: trait "${name}" is missing required fields (description, whyItFits, evidence).`);
+      }
 
       return {
         name,
@@ -710,12 +716,20 @@ export class GroqGateway {
       };
     });
 
-    // 2. Traits to Avoid
+    // 2. Traits to Avoid Validation (must be at least 2 anti-traits)
     const rawAvoid = Array.isArray(parsed.avoidTraits) ? parsed.avoidTraits : (Array.isArray(parsed.traitsToAvoid) ? parsed.traitsToAvoid : []);
+    if (rawAvoid.length < 2) {
+      throw new Error(`Invalid Personality data: expected at least 2 avoidTraits, got ${rawAvoid.length}.`);
+    }
+
     const traitsToAvoid: TraitToAvoid[] = rawAvoid.map((a: any, idx: number) => {
-      const name = String(a?.name || a?.trait || `Quarantined Behavior ${idx + 1}`).trim();
-      const description = String(a?.description || a?.reason || a?.reasonToAvoid || 'Destroys user credibility and alienates beachhead practitioners.').trim();
-      const reasonToAvoid = String(a?.reasonToAvoid || a?.reason || description).trim();
+      const name = String(a?.name || a?.trait || '').trim();
+      const reasonToAvoid = String(a?.reasonToAvoid || a?.reason || '').trim();
+      const description = String(a?.description || reasonToAvoid).trim();
+
+      if (!name || !reasonToAvoid) {
+        throw new Error(`Invalid Personality data: avoidTrait at index ${idx} is missing name or reasonToAvoid.`);
+      }
 
       return {
         name,
@@ -726,82 +740,112 @@ export class GroqGateway {
       };
     });
 
-    // 3. Operational Principles
+    // 3. Operational Principles Validation (must be at least 2 principles)
     const rawPrinciples = Array.isArray(parsed.principles) ? parsed.principles : [];
+    if (rawPrinciples.length < 2) {
+      throw new Error(`Invalid Personality data: expected at least 2 principles, got ${rawPrinciples.length}.`);
+    }
+
     const brandPrinciples: BrandPrinciple[] = rawPrinciples.map((p: any, idx: number) => {
-      if (typeof p === 'string') {
+      if (typeof p === 'string' && p.trim()) {
         return {
           name: p.trim(),
           statement: p.trim(),
           implication: 'Operational guideline for product and brand communication.',
         };
       }
-      const name = String(p?.name || `Principle ${idx + 1}`).trim();
+      const name = String(p?.name || '').trim();
       const statement = String(p?.statement || name).trim();
-      const implication = String(p?.implication || 'Concrete design and messaging heuristic.').trim();
+      const implication = String(p?.implication || '').trim();
+
+      if (!name || !statement) {
+        throw new Error(`Invalid Personality data: principle at index ${idx} is missing name or statement.`);
+      }
+
       return { name, statement, implication };
     });
 
     const principleStrings = brandPrinciples.map(bp => bp.statement || bp.name);
 
-    // 4. Dimensions
+    // 4. Dimensions Validation (must be at least 3 dimensions)
     const rawDimensions = Array.isArray(parsed.dimensions) ? parsed.dimensions : [];
+    if (rawDimensions.length < 3) {
+      throw new Error(`Invalid Personality data: expected at least 3 dimensions, got ${rawDimensions.length}.`);
+    }
+
     const dimensions: PersonalityDimension[] = rawDimensions.map((d: any, idx: number) => {
+      const dimName = String(d?.dimension || '').trim();
+      if (!dimName) {
+        throw new Error(`Invalid Personality data: dimension at index ${idx} is missing dimension name.`);
+      }
       const val = typeof d?.value === 'number' ? Math.max(0, Math.min(100, Math.round(d.value))) : 50;
       return {
-        dimension: String(d?.dimension || `Dimension ${idx + 1}`).trim(),
+        dimension: dimName,
         value: val,
         lowLabel: String(d?.lowLabel || 'Understated').trim(),
         highLabel: String(d?.highLabel || 'Expressive').trim(),
-        rationale: String(d?.rationale || 'Calibrated to maximize user trust.').trim(),
+        rationale: String(d?.rationale || '').trim(),
       };
     });
 
-    // 5. Voice System Validation & Normalization
-    const rawVoice = (parsed.voice && typeof parsed.voice === 'object') ? parsed.voice : {};
-    const voiceSummary = String(rawVoice.summary || parsed.voiceAndTone?.tone || 'Direct, intellectually honest, pragmatic, and encouraging').trim();
-
-    const voiceChars: VoiceCharacteristic[] = (Array.isArray(rawVoice.characteristics) ? rawVoice.characteristics : []).map((vc: any) => ({
-      characteristic: String(vc?.characteristic || 'Decisive & Crisp').trim(),
-      explanation: String(vc?.explanation || 'Uses active verbs and concise syntax.').trim(),
-    }));
-
-    if (voiceChars.length === 0) {
-      voiceChars.push(
-        { characteristic: 'Direct & Unvarnished', explanation: 'Speaks with precision, eliminating corporate qualifiers and filler words.' },
-        { characteristic: 'Practitioner-First', explanation: 'Uses terminology familiar to experienced users without condescension.' },
-        { characteristic: 'Action-Oriented', explanation: 'Frames every insight around what the user can build or execute next.' }
-      );
+    // 5. Voice System Validation (summary, characteristics >= 2, toneRules >= 2)
+    if (!parsed.voice || typeof parsed.voice !== 'object') {
+      throw new Error('Invalid Personality data: missing required property: voice.');
     }
 
-    const toneRules: VoiceToneRule[] = (Array.isArray(rawVoice.toneRules) ? rawVoice.toneRules : []).map((tr: any) => ({
-      do: String(tr?.do || 'Write in active voice with clear verbs.').trim(),
-      avoid: String(tr?.avoid || 'Avoid passive corporate phrasing.').trim(),
-      example: String(tr?.example || 'Build your high-chemistry team in 3 clicks.').trim(),
-    }));
-
-    if (toneRules.length === 0) {
-      toneRules.push(
-        {
-          do: 'State the functional benefit before introducing the mechanism.',
-          avoid: 'Leading with technical abstractions or proprietary terminology.',
-          example: 'Match with complementary co-builders instantly using our verified skill index.',
-        },
-        {
-          do: 'Acknowledge tradeoffs openly when making recommendations.',
-          avoid: 'Pretending a single solution is universally perfect for every edge case.',
-          example: 'This territory prioritizes sprint velocity over long-term multi-year retention loops.',
-        }
-      );
+    const voiceSummary = String(parsed.voice.summary || '').trim();
+    if (!voiceSummary) {
+      throw new Error('Invalid Personality data: voice summary is missing or empty.');
     }
 
-    // 6. Writing Samples Validation & Normalization
-    const rawSamples = (parsed.writingSamples && typeof parsed.writingSamples === 'object') ? parsed.writingSamples : {};
+    const rawChars = Array.isArray(parsed.voice.characteristics) ? parsed.voice.characteristics : [];
+    if (rawChars.length < 2) {
+      throw new Error(`Invalid Personality data: expected at least 2 voice characteristics, got ${rawChars.length}.`);
+    }
+
+    const voiceChars: VoiceCharacteristic[] = rawChars.map((vc: any, idx: number) => {
+      const characteristic = String(vc?.characteristic || '').trim();
+      const explanation = String(vc?.explanation || '').trim();
+      if (!characteristic || !explanation) {
+        throw new Error(`Invalid Personality data: voice characteristic at index ${idx} is incomplete.`);
+      }
+      return { characteristic, explanation };
+    });
+
+    const rawRules = Array.isArray(parsed.voice.toneRules) ? parsed.voice.toneRules : [];
+    if (rawRules.length < 2) {
+      throw new Error(`Invalid Personality data: expected at least 2 voice toneRules, got ${rawRules.length}.`);
+    }
+
+    const toneRules: VoiceToneRule[] = rawRules.map((tr: any, idx: number) => {
+      const doRule = String(tr?.do || '').trim();
+      const avoidRule = String(tr?.avoid || '').trim();
+      const example = String(tr?.example || '').trim();
+      if (!doRule || !avoidRule || !example) {
+        throw new Error(`Invalid Personality data: tone rule at index ${idx} is incomplete.`);
+      }
+      return { do: doRule, avoid: avoidRule, example };
+    });
+
+    // 6. Writing Samples Validation (all 4 fields strictly required, no fake fallbacks)
+    if (!parsed.writingSamples || typeof parsed.writingSamples !== 'object') {
+      throw new Error('Invalid Personality data: missing required property: writingSamples.');
+    }
+
+    const headline = String(parsed.writingSamples.headline || '').trim();
+    const valueProposition = String(parsed.writingSamples.valueProposition || '').trim();
+    const socialMessage = String(parsed.writingSamples.socialMessage || '').trim();
+    const userExplanation = String(parsed.writingSamples.userExplanation || '').trim();
+
+    if (!headline || !valueProposition || !socialMessage || !userExplanation) {
+      throw new Error('Invalid Personality data: missing required property: writingSamples fields are incomplete (requires headline, valueProposition, socialMessage, and userExplanation).');
+    }
+
     const writingSamples: WritingSamples = {
-      headline: String(rawSamples.headline || 'Stop Competing Solo. Build Your Squad in Minutes.').trim(),
-      valueProposition: String(rawSamples.valueProposition || 'Turn solitary makers into high-chemistry, complementary squads before the clock starts.').trim(),
-      socialMessage: String(rawSamples.socialMessage || 'Building alone this weekend? Match with a killer UI designer and backend engineer right now on BrandForge.').trim(),
-      userExplanation: String(rawSamples.userExplanation || 'We pair complementary skills and commitment levels so your project gets built and shipped on time.').trim(),
+      headline,
+      valueProposition,
+      socialMessage,
+      userExplanation,
     };
 
     const voiceAndTone = {
@@ -811,7 +855,7 @@ export class GroqGateway {
       characteristics: voiceChars,
       toneRules,
       writingSampleDo: `${writingSamples.headline} — ${writingSamples.valueProposition}`,
-      writingSampleDont: toneRules[0]?.avoid || 'Leverage synergistic multi-tenant human capital allocation engines.',
+      writingSampleDont: toneRules[0]?.avoid || 'Corporate filler jargon.',
       writingSamples,
     };
 
